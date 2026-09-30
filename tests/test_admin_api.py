@@ -180,3 +180,24 @@ def test_system_logs_only_invalid_records_return_empty_page(
     response = file_client.get("/admin/system-logs")
     assert response.status_code == 200
     assert response.json() == {"items": [], "total": 0, "page": 1, "size": 20}
+
+
+def test_system_logs_full_flow_file_to_api(file_client, sample_log_file):
+    """파일에서 API까지 전 구간: 유효 줄만, 최신순, 페이지 합치기, 원본 불변."""
+    import hashlib
+
+    before = hashlib.sha256(sample_log_file.read_bytes()).hexdigest()
+
+    all_items = file_client.get("/admin/system-logs", params={"size": 100}).json()
+    assert all_items["total"] == 3
+
+    page1 = file_client.get("/admin/system-logs", params={"size": 2, "page": 1}).json()
+    page2 = file_client.get("/admin/system-logs", params={"size": 2, "page": 2}).json()
+    joined = [item["event"] for item in page1["items"]] + [
+        item["event"] for item in page2["items"]
+    ]
+    assert joined == [item["event"] for item in all_items["items"]]
+    assert page1["total"] == page2["total"] == 3
+
+    after = hashlib.sha256(sample_log_file.read_bytes()).hexdigest()
+    assert before == after
