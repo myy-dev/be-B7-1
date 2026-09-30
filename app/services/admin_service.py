@@ -1,3 +1,10 @@
+"""관리자 조회 로직.
+
+라우터는 이 서비스에만 의존하고, 서비스는 저장소 인터페이스에만 의존한다.
+그래서 저장 방식을 임시에서 실제 DB로 바꿔도 이 파일은 그대로다. 조회 결과가
+없으면 404(AppError)로 알린다.
+"""
+
 from datetime import datetime
 
 from app.core.errors import AppError

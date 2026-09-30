@@ -1,3 +1,9 @@
+"""관리자 조회 API.
+
+관리자 화면이 회원·대화 기록·세션·시스템 로그를 조회하는 창구다. 목록은
+공통 페이지 형식으로 돌려주고, 자세한 응답 필드는 schemas/admin.py에 있다.
+"""
+
 from datetime import datetime
 from typing import Annotated
 

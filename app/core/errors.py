@@ -1,8 +1,17 @@
+"""에러 응답 형식.
+
+프론트가 오류를 한 가지 모양으로 처리하도록, 모든 오류를
+{"error": {"code", "message"}} 형태로 내보낸다. 서비스는 AppError를 던지고,
+여기 핸들러가 상태 코드와 본문으로 바꾼다.
+"""
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 
 class AppError(Exception):
+    """서비스 계층이 던지는 오류. code는 프론트가 분기하는 식별자다."""
+
     def __init__(self, code: str, message: str, status_code: int = 400) -> None:
         self.code = code
         self.message = message

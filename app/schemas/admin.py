@@ -1,3 +1,9 @@
+"""관리자 조회 응답 형식.
+
+프론트가 받는 JSON 모양이다. 여기 선언한 필드만 나가므로, 회원 스키마에
+비밀번호 같은 필드가 있어도 응답에는 싣지 않는다.
+"""
+
 from datetime import datetime
 
 from pydantic import BaseModel
