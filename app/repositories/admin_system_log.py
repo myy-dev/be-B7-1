@@ -2,9 +2,10 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.repositories.admin_repositories import SystemLogRepository
+from pydantic import ValidationError
 
-KNOWN_FIELDS = ("timestamp", "level", "event", "request_id", "user_id")
+from app.repositories.admin_repositories import SystemLogRepository
+from app.schemas.admin import SystemLogItem
 
 
 def parse_timestamp(value: object) -> datetime | None:
@@ -38,8 +39,17 @@ class SystemLogFileRepository(SystemLogRepository):
                     continue
                 if not isinstance(record, dict):
                     continue
-                row = {k: record.get(k) for k in KNOWN_FIELDS if k in record}
-                row["_ts"] = parse_timestamp(record.get("timestamp"))
+                timestamp = parse_timestamp(record.get("timestamp"))
+                if timestamp is None:
+                    continue
+                try:
+                    item = SystemLogItem.model_validate(
+                        {**record, "timestamp": timestamp}
+                    )
+                except ValidationError:
+                    continue
+                row = item.model_dump()
+                row["_ts"] = timestamp
                 rows.append(row)
         return rows
 

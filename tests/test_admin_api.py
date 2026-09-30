@@ -108,3 +108,66 @@ def test_system_logs_sorted_newest_first(file_client):
     body = file_client.get("/admin/system-logs").json()
     events = [item["event"] for item in body["items"]]
     assert events == ["db_save_success", "ai_call_failed", "ai_call_started"]
+
+
+@pytest.mark.parametrize(
+    "invalid_record",
+    [
+        {"level": "INFO", "event": "request_received"},
+        {"timestamp": "not-a-date", "level": "INFO", "event": "request_received"},
+        {"timestamp": 123, "level": "INFO", "event": "request_received"},
+        {"timestamp": "2026-09-30T08:00:00Z", "event": "request_received"},
+        {"timestamp": "2026-09-30T08:00:00Z", "level": "INFO"},
+        {"timestamp": "2026-09-30T08:00:00Z", "level": [], "event": "request_received"},
+        {
+            "timestamp": "2026-09-30T08:00:00Z",
+            "level": "INFO",
+            "event": "request_received",
+            "user_id": "not-an-id",
+        },
+        [],
+    ],
+)
+def test_system_logs_skip_invalid_records(file_client, sample_log_file, invalid_record):
+    with sample_log_file.open("a", encoding="utf-8") as log:
+        log.write(json.dumps(invalid_record) + "\n")
+        log.write(
+            json.dumps(
+                {
+                    "timestamp": "2026-09-30T09:00:00Z",
+                    "level": "INFO",
+                    "event": "request_received",
+                }
+            )
+            + "\n"
+        )
+    response = file_client.get("/admin/system-logs")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 4
+    assert [item["event"] for item in body["items"]] == [
+        "request_received",
+        "db_save_success",
+        "ai_call_failed",
+        "ai_call_started",
+    ]
+    filtered = file_client.get(
+        "/admin/system-logs",
+        params={"level": "INFO", "start": "2026-09-30T06:30:00Z", "size": 1, "page": 2},
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 2
+    assert filtered.json()["items"][0]["event"] == "db_save_success"
+
+
+def test_system_logs_only_invalid_records_return_empty_page(
+    file_client, sample_log_file
+):
+    sample_log_file.write_text(
+        'not-json\n{"level":"INFO"}\n'
+        '{"timestamp":"bad","level":"INFO","event":"request_received"}\n',
+        encoding="utf-8",
+    )
+    response = file_client.get("/admin/system-logs")
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "total": 0, "page": 1, "size": 20}
