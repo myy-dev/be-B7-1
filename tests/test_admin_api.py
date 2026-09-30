@@ -1,3 +1,10 @@
+"""관리자 조회 API 테스트.
+
+대부분은 스키마 확정 전이라 mock 저장소로 응답 형식과 동작을 검증한다.
+시스템 로그만 실제 파일을 읽으므로 파일→API 전 구간까지 확인한다.
+저장소·인증이 실제 구현으로 바뀌면 mock 전제의 테스트만 갱신하면 된다.
+"""
+
 import json
 
 import pytest
@@ -18,14 +25,17 @@ client = TestClient(app)
 
 
 def test_admin_route_passes_with_mock_gate():
+    # 인증은 아직 mock 통과(개발용)라, 게이트가 요청을 막지 않는지 확인한다.
     assert client.get("/admin/users").status_code == 200
 
 
 def test_health():
+    # 앱이 정상 기동해 헬스 응답을 내는지 확인한다.
     assert client.get("/health").json() == {"status": "ok"}
 
 
 def test_list_users_returns_page():
+    # 회원 목록이 공통 페이지 형태(items·total·page·size)로 오는지 확인한다.
     res = client.get("/admin/users")
     assert res.status_code == 200
     body = res.json()
@@ -34,6 +44,8 @@ def test_list_users_returns_page():
 
 
 def test_list_users_slices_by_page():
+    # 페이지마다 다른 항목이 오고, total은 전체 수로 일정한지 확인한다.
+    # (저장소가 실제로 자르는지 — 이전에 mock이 페이지를 무시하던 회귀 방지)
     first = client.get("/admin/users", params={"page": 1, "size": 1}).json()
     second = client.get("/admin/users", params={"page": 2, "size": 1}).json()
     assert len(first["items"]) == 1
@@ -43,24 +55,28 @@ def test_list_users_slices_by_page():
 
 
 def test_user_detail_serializes_only_declared_fields():
+    # 응답이 스키마에 선언한 필드만 나가는지(민감 필드 노출 차단) 확인한다.
     detail = client.get("/admin/users/1").json()
     assert set(detail) <= set(UserDetail.model_fields)
     assert "password" not in json.dumps(detail).lower()
 
 
 def test_get_user_not_found_returns_standard_error():
+    # 없는 회원은 404와 공통 에러 형식(code)으로 오는지 확인한다.
     res = client.get("/admin/users/9999")
     assert res.status_code == 404
     assert res.json()["error"]["code"] == "USER_NOT_FOUND"
 
 
 def test_list_logs_filters_by_user():
+    # 대화 기록이 user_id로 걸러지는지 확인한다.
     res = client.get("/admin/logs", params={"user_id": 1})
     assert res.status_code == 200
     assert all(item["user_id"] == 1 for item in res.json()["items"])
 
 
 def test_sessions_and_detail():
+    # 사용자 세션 목록 → 세션 상세(그 세션의 대화 포함) 흐름을 확인한다.
     listing = client.get("/admin/sessions", params={"user_id": 1}).json()
     assert listing["total"] >= 1
     session_id = listing["items"][0]["id"]
@@ -70,6 +86,7 @@ def test_sessions_and_detail():
 
 
 def test_get_session_not_found():
+    # 없는 세션은 404와 공통 에러 형식으로 오는지 확인한다.
     res = client.get("/admin/sessions/9999")
     assert res.status_code == 404
     assert res.json()["error"]["code"] == "SESSION_NOT_FOUND"
@@ -77,6 +94,8 @@ def test_get_session_not_found():
 
 @pytest.fixture
 def sample_log_file(tmp_path):
+    # 정상 3줄(시간 오름차순)과 깨진 1줄을 담은 임시 로그 파일을 만든다.
+    # 정렬·필터·건너뛰기 검증의 기준 데이터가 된다.
     path = tmp_path / "system.jsonl"
     path.write_text(
         '{"timestamp":"2026-09-30T05:00:00Z","level":"INFO",'
@@ -93,6 +112,8 @@ def sample_log_file(tmp_path):
 
 @pytest.fixture
 def file_client(sample_log_file):
+    # 시스템 로그 저장소만 임시 파일로 바꿔치고 나머지는 mock을 유지한다.
+    # 끝나면 오버라이드를 지워 다른 테스트에 새지 않게 한다.
     app.dependency_overrides[get_admin_service] = lambda: AdminService(
         users=MockUserRepository(),
         chat_logs=MockChatLogRepository(),
@@ -104,6 +125,7 @@ def file_client(sample_log_file):
 
 
 def test_system_logs_read_from_file_with_event_filter(file_client):
+    # event로 거른 결과가 파일과 맞는지, 내부 정렬 키(_ts)가 안 나오는지 확인한다.
     res = file_client.get("/admin/system-logs", params={"event": "ai_call_started"})
     assert res.status_code == 200
     body = res.json()
@@ -114,6 +136,7 @@ def test_system_logs_read_from_file_with_event_filter(file_client):
 
 
 def test_system_logs_sorted_newest_first(file_client):
+    # 정렬은 항상 최신순이어야 한다(파일은 시간 오름차순으로 썼음).
     body = file_client.get("/admin/system-logs").json()
     events = [item["event"] for item in body["items"]]
     assert events == ["db_save_success", "ai_call_failed", "ai_call_started"]
@@ -122,6 +145,7 @@ def test_system_logs_sorted_newest_first(file_client):
 @pytest.mark.parametrize(
     "invalid_record",
     [
+        # 필수 필드(timestamp·level·event) 누락 또는 형식 오류, 자료형 오류, JSON 배열.
         {"level": "INFO", "event": "request_received"},
         {"timestamp": "not-a-date", "level": "INFO", "event": "request_received"},
         {"timestamp": 123, "level": "INFO", "event": "request_received"},
@@ -138,6 +162,8 @@ def test_system_logs_sorted_newest_first(file_client):
     ],
 )
 def test_system_logs_skip_invalid_records(file_client, sample_log_file, invalid_record):
+    # 잘못된 줄 뒤에 정상 줄을 붙여, 깨진 줄만 건너뛰고 조회 전체는 계속되는지 확인한다.
+    # (한 줄 때문에 500이 나던 회귀 방지)
     with sample_log_file.open("a", encoding="utf-8") as log:
         log.write(json.dumps(invalid_record) + "\n")
         log.write(
@@ -172,6 +198,7 @@ def test_system_logs_skip_invalid_records(file_client, sample_log_file, invalid_
 def test_system_logs_only_invalid_records_return_empty_page(
     file_client, sample_log_file
 ):
+    # 전부 깨진 줄이어도 오류가 아니라 200과 빈 페이지를 돌려주는지 확인한다.
     sample_log_file.write_text(
         'not-json\n{"level":"INFO"}\n'
         '{"timestamp":"bad","level":"INFO","event":"request_received"}\n',
@@ -183,14 +210,17 @@ def test_system_logs_only_invalid_records_return_empty_page(
 
 
 def test_system_logs_full_flow_file_to_api(file_client, sample_log_file):
-    """파일에서 API까지 전 구간: 유효 줄만, 최신순, 페이지 합치기, 원본 불변."""
+    """파일에서 API까지 전 구간을 한 흐름으로 확인한다."""
     import hashlib
 
+    # 조회 전후 파일 해시를 비교해, 조회가 원본을 바꾸지 않음을 증명한다.
     before = hashlib.sha256(sample_log_file.read_bytes()).hexdigest()
 
+    # 정상 3줄만, 최신순으로 나온다.
     all_items = file_client.get("/admin/system-logs", params={"size": 100}).json()
     assert all_items["total"] == 3
 
+    # 페이지를 나눠 받아 이어붙이면 전체 조회와 순서까지 일치한다.
     page1 = file_client.get("/admin/system-logs", params={"size": 2, "page": 1}).json()
     page2 = file_client.get("/admin/system-logs", params={"size": 2, "page": 2}).json()
     joined = [item["event"] for item in page1["items"]] + [
