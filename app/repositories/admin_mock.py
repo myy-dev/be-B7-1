@@ -1,9 +1,11 @@
+# TODO(회원·채팅 담당): 스키마 확정 후 실제 DB 조회로 바꾸고 이 파일을 지운다.
+
 from datetime import UTC, datetime
 
+from app.core.pagination import slice_page
 from app.repositories.admin_repositories import (
     ChatLogRepository,
     SessionRepository,
-    SystemLogRepository,
     UserRepository,
 )
 
@@ -58,7 +60,7 @@ SESSIONS = [
 
 class MockUserRepository(UserRepository):
     async def list_users(self, page: int, size: int) -> tuple[list[dict], int]:
-        return USERS, len(USERS)
+        return slice_page(USERS, page, size)
 
     async def get_user(self, user_id: int) -> dict | None:
         return next((u for u in USERS if u["id"] == user_id), None)
@@ -71,7 +73,7 @@ class MockChatLogRepository(ChatLogRepository):
         rows = LOGS
         if user_id is not None:
             rows = [r for r in rows if r["user_id"] == user_id]
-        return rows, len(rows)
+        return slice_page(rows, page, size)
 
 
 class MockSessionRepository(SessionRepository):
@@ -79,7 +81,7 @@ class MockSessionRepository(SessionRepository):
         self, user_id: int, page: int, size: int
     ) -> tuple[list[dict], int]:
         rows = [s for s in SESSIONS if s["user_id"] == user_id]
-        return rows, len(rows)
+        return slice_page(rows, page, size)
 
     async def get_session(self, session_id: int) -> dict | None:
         session = next((s for s in SESSIONS if s["id"] == session_id), None)
@@ -87,23 +89,3 @@ class MockSessionRepository(SessionRepository):
             return None
         messages = [m for m in LOGS if m["session_id"] == session_id]
         return {**session, "messages": messages}
-
-
-class MockSystemLogRepository(SystemLogRepository):
-    async def query(
-        self, level, event, start, end, page, size
-    ) -> tuple[list[dict], int]:
-        rows = [
-            {
-                "timestamp": NOW,
-                "level": "INFO",
-                "event": "ai_call_started",
-                "request_id": "abc-123",
-                "user_id": 1,
-            }
-        ]
-        if level:
-            rows = [r for r in rows if r["level"] == level]
-        if event:
-            rows = [r for r in rows if r["event"] == event]
-        return rows, len(rows)

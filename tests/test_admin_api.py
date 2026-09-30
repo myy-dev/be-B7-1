@@ -33,6 +33,15 @@ def test_list_users_returns_page():
     assert body["total"] >= 1
 
 
+def test_list_users_slices_by_page():
+    first = client.get("/admin/users", params={"page": 1, "size": 1}).json()
+    second = client.get("/admin/users", params={"page": 2, "size": 1}).json()
+    assert len(first["items"]) == 1
+    assert len(second["items"]) == 1
+    assert first["items"][0]["id"] != second["items"][0]["id"]
+    assert first["total"] == second["total"] == 2
+
+
 def test_user_detail_serializes_only_declared_fields():
     detail = client.get("/admin/users/1").json()
     assert set(detail) <= set(UserDetail.model_fields)
