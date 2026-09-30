@@ -1,0 +1,68 @@
+from datetime import datetime
+
+from app.core.errors import AppError
+from app.repositories.admin_repositories import (
+    ChatLogRepository,
+    SessionRepository,
+    SystemLogRepository,
+    UserRepository,
+)
+
+
+class AdminService:
+    def __init__(
+        self,
+        users: UserRepository,
+        chat_logs: ChatLogRepository,
+        sessions: SessionRepository,
+        system_logs: SystemLogRepository,
+    ) -> None:
+        self.users = users
+        self.chat_logs = chat_logs
+        self.sessions = sessions
+        self.system_logs = system_logs
+
+    async def list_users(self, page: int, size: int) -> tuple[list[dict], int]:
+        return await self.users.list_users(page, size)
+
+    async def get_user(self, user_id: int) -> dict:
+        user = await self.users.get_user(user_id)
+        if user is None:
+            raise AppError(
+                "USER_NOT_FOUND", "회원을 찾을 수 없습니다.", status_code=404
+            )
+        return user
+
+    async def list_logs(
+        self,
+        user_id: int | None,
+        start: datetime | None,
+        end: datetime | None,
+        page: int,
+        size: int,
+    ) -> tuple[list[dict], int]:
+        return await self.chat_logs.list_logs(user_id, start, end, page, size)
+
+    async def list_sessions(
+        self, user_id: int, page: int, size: int
+    ) -> tuple[list[dict], int]:
+        return await self.sessions.list_sessions(user_id, page, size)
+
+    async def get_session(self, session_id: int) -> dict:
+        session = await self.sessions.get_session(session_id)
+        if session is None:
+            raise AppError(
+                "SESSION_NOT_FOUND", "세션을 찾을 수 없습니다.", status_code=404
+            )
+        return session
+
+    async def list_system_logs(
+        self,
+        level: str | None,
+        event: str | None,
+        start: datetime | None,
+        end: datetime | None,
+        page: int,
+        size: int,
+    ) -> tuple[list[dict], int]:
+        return await self.system_logs.query(level, event, start, end, page, size)
