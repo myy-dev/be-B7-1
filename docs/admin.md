@@ -40,8 +40,9 @@ tests/test_admin_api.py          테스트
 
 - 회원, 대화 기록, 세션은 저장소 스키마가 정해지지 않아 `admin_mock.py`로 돌아간다. 스키마가 나오면 이 파일만 실제 조회로 바꾸면 되고, 서비스와 라우터는 그대로 둔다.
 - 관리자 인증은 회원 담당이 JWT를 정하기 전까지 검사 없이 통과시킨다(`admin_deps.py`의 `require_admin`).
-- 시스템 로그는 백엔드 각자 JSONL 파일로 남기고, 조회는 여기서 맡는다. `event`, `level`, `start`, `end`로 걸러 최신순으로 준다. 이벤트 이름과 필드가 팀에서 정해지면 `admin_system_log.py`에서 맞춘다.
+- 시스템 로그는 백엔드 각자 JSONL 파일로 남기고, 조회는 여기서 맡는다. `event`, `level`, `start`, `end`로 걸러 최신순으로 준다. 형식은 조회를 맡은 어드민이 제시했고 [system-logs.md](system-logs.md)에 있다.
+- 저장소와 인증은 스키마·JWT가 나오면 바꿀 자리를 코드에 `TODO(담당)`로 표시해 두었다.
 
 ## 환경 변수
 
-`SYSTEM_LOG_PATH` — 시스템 로그 파일 경로. 안 넣으면 `logs/system.jsonl`.
+`SYSTEM_LOG_PATH` — 시스템 로그 파일 경로. 공용 `Settings.system_log_path`로 관리한다(기본 `logs/system.jsonl`).

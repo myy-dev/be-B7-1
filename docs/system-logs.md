@@ -10,7 +10,7 @@
 logs/system.jsonl
 ```
 
-경로는 `SYSTEM_LOG_PATH` 환경 변수로 바꿀 수 있고, 기본값은 위 경로다. 개발할 땐 각자 로컬에 남기고, 배포할 땐 한 파일에 쌓이도록 맞춘다.
+경로는 공용 설정 `Settings.system_log_path`가 갖고 있다(`app/core/config.py`). 기본값은 위 경로이고, `SYSTEM_LOG_PATH` 환경 변수나 `.env`로 바꾼다. 개발할 땐 각자 로컬에 남기고, 배포할 땐 한 파일에 쌓이도록 맞춘다.
 
 ## 필드
 
