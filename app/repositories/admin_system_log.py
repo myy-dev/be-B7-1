@@ -1,3 +1,10 @@
+"""시스템 이벤트 로그(JSONL) 파일 조회.
+
+기록은 백엔드 각 담당이 같은 파일에 남기고 조회만 여기서 한다. 요청마다 파일
+전체를 읽어 파이썬에서 거르고 정렬하므로, 로그가 커지면 이 지점이 가장 먼저
+느려진다(기간 필터를 읽기 단계로 내리거나 DB로 옮기는 것이 다음 후보).
+"""
+
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +34,8 @@ class SystemLogFileRepository(SystemLogRepository):
         self.path = Path(path)
 
     def _read_all(self) -> list[dict]:
+        # 파일이 없으면 빈 목록이다(조회는 200·빈 페이지).
+        # 읽기 권한 오류 같은 다른 실패는 지금은 500으로 나간다.
         if not self.path.exists():
             return []
         rows: list[dict] = []

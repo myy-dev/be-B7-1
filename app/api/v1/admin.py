@@ -2,6 +2,9 @@
 
 관리자 화면이 회원·대화 기록·세션·시스템 로그를 조회하는 창구다. 목록은
 공통 페이지 형식으로 돌려주고, 자세한 응답 필드는 schemas/admin.py에 있다.
+
+접근 제어는 라우터 공통 의존성(require_admin)에서 한 번만 걸고, 오류는
+core/errors.py 형식으로 통일한다. size 상한으로 한 번에 주는 양도 제한한다.
 """
 
 from datetime import datetime

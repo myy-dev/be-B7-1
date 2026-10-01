@@ -2,7 +2,8 @@
 
 프론트가 오류를 한 가지 모양으로 처리하도록, 모든 오류를
 {"error": {"code", "message"}} 형태로 내보낸다. 서비스는 AppError를 던지고,
-여기 핸들러가 상태 코드와 본문으로 바꾼다.
+여기 핸들러가 상태 코드와 본문으로 바꾼다. 프론트는 code로 분기하고 message를
+사용자에게 그대로 보여줄 수 있다.
 """
 
 from fastapi import FastAPI, Request
