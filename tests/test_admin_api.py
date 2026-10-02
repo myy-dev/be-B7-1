@@ -62,26 +62,49 @@ def test_user_detail_serializes_only_declared_fields():
 
 
 def test_get_user_not_found_returns_standard_error():
-    # 없는 회원은 404와 공통 에러 형식(code)으로 오는지 확인한다.
+    # 없는 회원은 404와 공통 에러 형식(code·request_id)으로 오는지 확인한다.
     res = client.get("/admin/users/9999")
     assert res.status_code == 404
-    assert res.json()["error"]["code"] == "USER_NOT_FOUND"
+    error = res.json()["error"]
+    assert error["code"] == "USER_NOT_FOUND"
+    assert isinstance(error["request_id"], str) and error["request_id"]
 
 
 def test_list_logs_filters_by_user():
-    # 대화 기록이 user_id로 걸러지는지 확인한다.
+    # 대화 기록이 그 회원 소유 세션으로 걸러지는지 확인한다(기록은 chat_id로 묶임).
     res = client.get("/admin/logs", params={"user_id": 1})
     assert res.status_code == 200
-    assert all(item["user_id"] == 1 for item in res.json()["items"])
+    assert res.json()["total"] == 2
+    # 소유 세션이 없는 회원은 0건이다.
+    assert client.get("/admin/logs", params={"user_id": 2}).json()["total"] == 0
+
+
+def test_logs_return_record_fields():
+    # 대화 기록이 request_id·status·error_code 등 기록 필드로 오는지 확인한다.
+    items = client.get("/admin/logs", params={"user_id": 1}).json()["items"]
+    assert items
+    expected = {
+        "request_id",
+        "chat_id",
+        "question",
+        "answer",
+        "status",
+        "error_code",
+        "created_at",
+        "finished_at",
+    }
+    assert set(items[0]) == expected
+    statuses = {item["status"] for item in items}
+    assert statuses <= {"pending", "completed", "failed"}
 
 
 def test_sessions_and_detail():
     # 사용자 세션 목록 → 세션 상세(그 세션의 대화 포함) 흐름을 확인한다.
     listing = client.get("/admin/sessions", params={"user_id": 1}).json()
     assert listing["total"] >= 1
-    session_id = listing["items"][0]["id"]
-    detail = client.get(f"/admin/sessions/{session_id}").json()
-    assert detail["id"] == session_id
+    chat_id = listing["items"][0]["chat_id"]
+    detail = client.get(f"/admin/sessions/{chat_id}").json()
+    assert detail["chat_id"] == chat_id
     assert isinstance(detail["messages"], list)
 
 
@@ -231,3 +254,38 @@ def test_system_logs_full_flow_file_to_api(file_client, sample_log_file):
 
     after = hashlib.sha256(sample_log_file.read_bytes()).hexdigest()
     assert before == after
+
+
+def test_system_logs_naive_period_filter_treated_as_utc(file_client):
+    # 타임존 없는 입력은 UTC로 간주한다 — 타임존 있는 입력과 같은 결과가 나오고,
+    # naive·aware 비교로 500이 나던 문제가 다시 생기지 않는지 확인한다.
+    aware = file_client.get(
+        "/admin/system-logs", params={"start": "2026-09-30T06:30:00Z"}
+    )
+    naive = file_client.get(
+        "/admin/system-logs", params={"start": "2026-09-30T06:30:00"}
+    )
+    assert naive.status_code == 200
+    assert naive.json() == aware.json()
+    assert naive.json()["total"] == 1
+
+
+def test_system_logs_period_filter_converts_offset_to_utc(file_client):
+    # 타임존 있는 입력은 UTC로 환산해 비교한다(+09:00 15:30 == 06:30Z).
+    response = file_client.get(
+        "/admin/system-logs", params={"start": "2026-09-30T15:30:00+09:00"}
+    )
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+
+
+def test_system_logs_reversed_period_returns_empty_page(file_client):
+    # start가 end보다 뒤여도 500이 아니라 빈 페이지로 끝나는지 확인한다.
+    response = file_client.get(
+        "/admin/system-logs",
+        params={"start": "2026-09-30T07:00:00", "end": "2026-09-30T06:00:00"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["total"] == 0

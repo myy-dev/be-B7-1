@@ -7,12 +7,12 @@
 core/errors.py 형식으로 통일한다. size 상한으로 한 번에 주는 양도 제한한다.
 """
 
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.admin_deps import get_admin_service, require_admin
+from app.core.datetimes import UtcDateTime
 from app.core.pagination import Page, make_page
 from app.schemas.admin import (
     ChatLogItem,
@@ -51,8 +51,8 @@ async def get_user(
 async def list_logs(
     service: Annotated[AdminService, Depends(get_admin_service)],
     user_id: int | None = None,
-    start: datetime | None = None,
-    end: datetime | None = None,
+    start: UtcDateTime | None = None,
+    end: UtcDateTime | None = None,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
@@ -71,12 +71,12 @@ async def list_sessions(
     return make_page(items, total, page, size)
 
 
-@router.get("/sessions/{session_id}", response_model=SessionDetail)
+@router.get("/sessions/{chat_id}", response_model=SessionDetail)
 async def get_session(
-    session_id: int,
+    chat_id: str,
     service: Annotated[AdminService, Depends(get_admin_service)],
 ):
-    return await service.get_session(session_id)
+    return await service.get_session(chat_id)
 
 
 @router.get("/system-logs", response_model=Page[SystemLogItem])
@@ -84,8 +84,8 @@ async def list_system_logs(
     service: Annotated[AdminService, Depends(get_admin_service)],
     level: str | None = None,
     event: str | None = None,
-    start: datetime | None = None,
-    end: datetime | None = None,
+    start: UtcDateTime | None = None,
+    end: UtcDateTime | None = None,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):

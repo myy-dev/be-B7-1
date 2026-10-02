@@ -10,10 +10,12 @@
 | GET | `/admin/users/{id}` | 회원 상세 |
 | GET | `/admin/logs` | 대화 기록 |
 | GET | `/admin/sessions` | 세션 목록 |
-| GET | `/admin/sessions/{id}` | 세션별 대화 |
+| GET | `/admin/sessions/{chat_id}` | 세션별 대화 (chat_id=uuid) |
 | GET | `/admin/system-logs` | 시스템 이벤트 로그 |
 
-`items`, `total`, `page`, `size` 형태로 돌려준다. 오류는 `{"error": {"code", "message"}}`로 통일한다.
+`items`, `total`, `page`, `size` 형태로 돌려준다. 오류는 프론트가 한 가지 모양으로 처리하도록 `{"error": {"code", "message", "request_id"}}`로 통일한다(request_id는 현재 요청 식별자).
+
+대화 기록·세션은 채팅 파트가 정한 식별자·기록 스키마를 따른다. 세션은 `chat_id`(uuid), 기록은 `request_id`(uuid)·`chat_id`·`question`·`answer`·`status`(pending/completed/failed)·`error_code`·`created_at`·`finished_at`을 쓴다.
 
 ## 파일
 
@@ -35,10 +37,12 @@ tests/test_admin_api.py          테스트
 | 관리자 라우터·서비스·응답 형식 | 구현 |
 | 시스템 로그 조회 | 구현 (이벤트·레벨·기간 필터, 최신순) |
 | 회원 조회 | 임시 데이터 (회원 스키마 대기) |
-| 대화 기록·세션 조회 | 임시 데이터 (채팅 스키마 대기) |
+| 대화 기록·세션 조회 | 임시 데이터 (채팅 스키마 대기, 응답 형식은 채팅 파트 스키마 반영) |
 | 관리자 인증 | 통과 (회원 담당 JWT 대기) |
+| 오류 응답 | 구현 (`code`·`message`·`request_id`) |
 
 - 회원, 대화 기록, 세션은 저장소 스키마가 정해지지 않아 `admin_mock.py`로 돌아간다. 스키마가 나오면 이 파일만 실제 조회로 바꾸면 되고, 서비스와 라우터는 그대로 둔다.
+- 응답 형식은 채팅 파트가 정한 세션 식별자(`chat_id`=uuid)와 대화 기록 스키마에 맞췄다. 실제 저장 스키마가 확정되면 `admin_mock.py`의 목 데이터만 실 DB 값으로 바꾸면 된다.
 - 관리자 인증은 회원 담당이 JWT를 정하기 전까지 검사 없이 통과시킨다(`admin_deps.py`의 `require_admin`).
 - 시스템 로그는 백엔드 각자 JSONL 파일로 남기고, 조회는 여기서 맡는다. `event`, `level`, `start`, `end`로 걸러 최신순으로 준다. 형식은 조회를 맡은 어드민이 제시했고 [system-logs.md](system-logs.md)에 있다.
 - 저장소와 인증은 스키마·JWT가 나오면 바꿀 자리를 코드에 `TODO(담당)`로 표시해 두었다.

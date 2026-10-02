@@ -6,11 +6,12 @@
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.core.datetimes import to_utc
 from app.core.pagination import slice_page
 from app.repositories.admin_repositories import SystemLogRepository
 from app.schemas.admin import SystemLogItem
@@ -24,9 +25,8 @@ def parse_timestamp(value: object) -> datetime | None:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed
+    # 타임존 없는 기록은 UTC로 간주한다(조회 파라미터와 같은 규칙).
+    return to_utc(parsed)
 
 
 class SystemLogFileRepository(SystemLogRepository):

@@ -21,16 +21,18 @@ class UserDetail(UserSummary):
 
 
 class ChatLogItem(BaseModel):
-    id: int
-    user_id: int
-    session_id: int | None
+    request_id: str
+    chat_id: str
     question: str
-    response: str
+    answer: str | None
+    status: str
+    error_code: str | None
     created_at: datetime
+    finished_at: datetime | None
 
 
 class SessionItem(BaseModel):
-    id: int
+    chat_id: str
     user_id: int
     title: str
     created_at: datetime

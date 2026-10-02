@@ -28,28 +28,34 @@ USERS = [
     },
 ]
 
+_CHAT_ID = "e6100748-b7f0-48e6-a264-7c20a748cf93"
+
 LOGS = [
     {
-        "id": 1,
-        "user_id": 1,
-        "session_id": 1,
+        "request_id": "16fd2706-8baf-433b-82eb-8c7fada847da",
+        "chat_id": _CHAT_ID,
         "question": "배포 방법 알려줘",
-        "response": "Vercel과 백엔드 배포 경로를 안내합니다.",
+        "answer": "Vercel과 백엔드 배포 경로를 안내합니다.",
+        "status": "completed",
+        "error_code": None,
         "created_at": NOW,
+        "finished_at": NOW,
     },
     {
-        "id": 2,
-        "user_id": 1,
-        "session_id": 1,
+        "request_id": "26fd2706-8baf-433b-82eb-8c7fada847db",
+        "chat_id": _CHAT_ID,
         "question": "아까 뭐 물어봤지?",
-        "response": "직전에 배포 방법을 물어보셨습니다.",
+        "answer": None,
+        "status": "failed",
+        "error_code": "AI_TIMEOUT",
         "created_at": NOW,
+        "finished_at": NOW,
     },
 ]
 
 SESSIONS = [
     {
-        "id": 1,
+        "chat_id": _CHAT_ID,
         "user_id": 1,
         "title": "배포 문의",
         "created_at": NOW,
@@ -72,7 +78,8 @@ class MockChatLogRepository(ChatLogRepository):
     ) -> tuple[list[dict], int]:
         rows = LOGS
         if user_id is not None:
-            rows = [r for r in rows if r["user_id"] == user_id]
+            owned = {s["chat_id"] for s in SESSIONS if s["user_id"] == user_id}
+            rows = [r for r in rows if r["chat_id"] in owned]
         return slice_page(rows, page, size)
 
 
@@ -83,9 +90,9 @@ class MockSessionRepository(SessionRepository):
         rows = [s for s in SESSIONS if s["user_id"] == user_id]
         return slice_page(rows, page, size)
 
-    async def get_session(self, session_id: int) -> dict | None:
-        session = next((s for s in SESSIONS if s["id"] == session_id), None)
+    async def get_session(self, chat_id: str) -> dict | None:
+        session = next((s for s in SESSIONS if s["chat_id"] == chat_id), None)
         if session is None:
             return None
-        messages = [m for m in LOGS if m["session_id"] == session_id]
+        messages = [m for m in LOGS if m["chat_id"] == chat_id]
         return {**session, "messages": messages}

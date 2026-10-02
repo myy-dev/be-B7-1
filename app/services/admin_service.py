@@ -55,8 +55,8 @@ class AdminService:
     ) -> tuple[list[dict], int]:
         return await self.sessions.list_sessions(user_id, page, size)
 
-    async def get_session(self, session_id: int) -> dict:
-        session = await self.sessions.get_session(session_id)
+    async def get_session(self, chat_id: str) -> dict:
+        session = await self.sessions.get_session(chat_id)
         if session is None:
             raise AppError(
                 "SESSION_NOT_FOUND", "세션을 찾을 수 없습니다.", status_code=404
