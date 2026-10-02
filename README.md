@@ -2,6 +2,11 @@
 
 B7-1 웹 기반 AI 챗봇 서비스 백엔드.
 
+## 테스트 (어드민 구현용으로 의존성 없이)
+```bash
+uv run --with pytest pytest
+```
+
 ## 문서
 - [시작하기](docs/GETTING_STARTED.md)
 - [관리자 파트](docs/admin.md)
