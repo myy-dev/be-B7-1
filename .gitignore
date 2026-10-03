@@ -236,3 +236,6 @@ pyrightconfig.json
 # AI
 AGENTS.md
 docs/PROGRESS.md
+
+# Runtime system logs
+/logs/
