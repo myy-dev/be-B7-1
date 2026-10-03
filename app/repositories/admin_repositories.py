@@ -5,6 +5,10 @@
 그대로다. 조회 메서드는 (자른 목록, 전체 수)를 돌려준다.
 """
 
+# TODO(회원·채팅 담당): 회원·대화·세션은 스키마 미확정이라 실제 DB 구현이 아직
+# 없다(현재 admin_mock.py가 대신한다). 스키마가 확정되면 이 인터페이스에 맞춰
+# 실제 조회를 붙이고 목 구현을 걷어낸다.
+
 from abc import ABC, abstractmethod
 from datetime import datetime
 
