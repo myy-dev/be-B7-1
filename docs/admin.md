@@ -6,12 +6,12 @@
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| GET | `/admin/users` | 회원 목록 |
-| GET | `/admin/users/{id}` | 회원 상세 |
-| GET | `/admin/logs` | 대화 기록 |
-| GET | `/admin/sessions` | 세션 목록 |
-| GET | `/admin/sessions/{chat_id}` | 세션별 대화 (chat_id=uuid) |
-| GET | `/admin/system-logs` | 시스템 이벤트 로그 |
+| GET | `/api/v1/admin/users` | 회원 목록 |
+| GET | `/api/v1/admin/users/{id}` | 회원 상세 |
+| GET | `/api/v1/admin/logs` | 대화 기록 |
+| GET | `/api/v1/admin/sessions` | 세션 목록 |
+| GET | `/api/v1/admin/sessions/{chat_id}` | 세션별 대화 (chat_id=uuid) |
+| GET | `/api/v1/admin/system-logs` | 시스템 이벤트 로그 |
 
 `items`, `total`, `page`, `size` 형태로 돌려준다. 오류는 프론트가 한 가지 모양으로 처리하도록 `{"error": {"code", "message", "request_id"}}`로 통일한다(request_id는 현재 요청 식별자).
 

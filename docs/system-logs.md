@@ -46,10 +46,10 @@ logs/system.jsonl
 
 ## 관리자 쪽에서 보는 방법
 
-`GET /admin/system-logs`로 `event`, `level`, `start`, `end`를 걸러 최신순으로 받는다.
+`GET /api/v1/admin/system-logs`로 `event`, `level`, `start`, `end`를 걸러 최신순으로 받는다.
 
 ```
-GET /admin/system-logs?level=ERROR&event=ai_call_failed
+GET /api/v1/admin/system-logs?level=ERROR&event=ai_call_failed
 ```
 
 ## 주의
