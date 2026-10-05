@@ -2,12 +2,12 @@
 
 import asyncio
 import json
-import unittest
-from collections.abc import AsyncGenerator
+import logging
+from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import UUID
 
+import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
@@ -71,198 +71,244 @@ def _test_app() -> FastAPI:
     return app
 
 
-class RequestProcessingTests(unittest.TestCase):
-    """실제 HTTP 요청에서 오류 형식·헤더·로그의 일관성을 확인한다."""
+@pytest.fixture
+def client() -> Iterator[TestClient]:
+    """공통 처리를 연결한 테스트 앱의 HTTP 클라이언트를 제공한다.
 
-    def test_server_generates_unique_request_ids(self) -> None:
-        """클라이언트 값을 사용하지 않고 요청마다 새 UUID4를 생성한다."""
-        client = TestClient(_test_app())
-        supplied_id = "16fd2706-8baf-433b-82eb-8c7fada847da"
-        with self.assertLogs("app.events", level="INFO") as logs:
-            first = client.get("/identity", headers={"X-Request-ID": supplied_id})
-            second = client.get("/identity")
-        request_id = first.json()["request_id"]
-        self.assertEqual(UUID(request_id).version, 4)
-        self.assertEqual(first.json()["context_id"], request_id)
-        self.assertEqual(first.headers["X-Request-ID"], request_id)
-        self.assertNotEqual(request_id, supplied_id)
-        self.assertNotEqual(request_id, second.json()["request_id"])
-        ids = {record.request_id for record in logs.records}
-        self.assertEqual(ids, {request_id, second.json()["request_id"]})
+    Yields:
+        테스트 종료 시 연결을 정리하는 HTTP 클라이언트.
+    """
+    test_client = TestClient(_test_app())
+    try:
+        yield test_client
+    finally:
+        test_client.close()
 
-    def test_specified_errors_share_response_and_log_id(self) -> None:
-        """명세의 모든 오류가 올바른 상태와 동일한 요청 ID를 사용한다."""
-        client = TestClient(_test_app())
-        for code, status_code in ERROR_STATUS_CODES.items():
-            with self.subTest(code=code), self.assertLogs("app.events") as logs:
-                response = client.get(f"/error/{code}")
-                error = response.json()["error"]
-                self.assertEqual(response.status_code, status_code)
-                self.assertEqual(set(error), {"code", "message", "request_id"})
-                self.assertEqual(error["code"], code)
-                self.assertEqual(error["request_id"], response.headers["X-Request-ID"])
-                self.assertEqual(UUID(error["request_id"]).version, 4)
-            self.assertTrue(
-                all(record.request_id == error["request_id"] for record in logs.records)
-            )
 
-    def test_validation_errors_do_not_expose_input(self) -> None:
-        """잘못된 JSON·본문·경로 입력의 원문을 응답과 이벤트 로그에서 제외한다."""
-        client = TestClient(_test_app())
-        for path, arguments in (
-            ("/validation", {"json": {"count": "private question"}}),
-            (
+@pytest.fixture
+def event_logs(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> pytest.LogCaptureFixture:
+    """상위 로거에 전달하지 않는 이벤트 로그를 caplog로 수집한다.
+
+    Args:
+        caplog: pytest 로그 수집 도구.
+        monkeypatch: 테스트 종료 후 로거 설정을 복원할 도구.
+
+    Returns:
+        현재 테스트의 이벤트 로그를 수집하는 도구.
+    """
+    logger = logging.getLogger("app.events")
+    monkeypatch.setattr(logger, "handlers", [caplog.handler])
+    monkeypatch.setattr(logger, "propagate", False)
+    caplog.set_level(logging.INFO, logger="app.events")
+    return caplog
+
+
+def test_server_generates_unique_request_ids(
+    client: TestClient, event_logs: pytest.LogCaptureFixture
+) -> None:
+    """클라이언트 값을 사용하지 않고 요청마다 새 UUID4를 생성한다."""
+    supplied_id = "16fd2706-8baf-433b-82eb-8c7fada847da"
+    first = client.get("/identity", headers={"X-Request-ID": supplied_id})
+    second = client.get("/identity")
+    request_id = first.json()["request_id"]
+    assert UUID(request_id).version == 4
+    assert first.json()["context_id"] == request_id
+    assert first.headers["X-Request-ID"] == request_id
+    assert request_id != supplied_id
+    assert request_id != second.json()["request_id"]
+    ids = {record.request_id for record in event_logs.records}
+    assert ids == {request_id, second.json()["request_id"]}
+
+
+@pytest.mark.parametrize(("code", "status_code"), ERROR_STATUS_CODES.items())
+def test_specified_errors_share_response_and_log_id(
+    client: TestClient,
+    event_logs: pytest.LogCaptureFixture,
+    code: ErrorCode,
+    status_code: int,
+) -> None:
+    """명세의 모든 오류가 올바른 상태와 동일한 요청 ID를 사용한다."""
+    response = client.get(f"/error/{code}")
+    error = response.json()["error"]
+    assert response.status_code == status_code
+    assert set(error) == {"code", "message", "request_id"}
+    assert error["code"] == code
+    assert error["request_id"] == response.headers["X-Request-ID"]
+    assert UUID(error["request_id"]).version == 4
+    assert event_logs.records
+    assert all(
+        record.request_id == error["request_id"] for record in event_logs.records
+    )
+
+
+@pytest.mark.parametrize("scenario", ["invalid-type", "invalid-json", "invalid-path"])
+def test_validation_errors_do_not_expose_input(
+    client: TestClient, event_logs: pytest.LogCaptureFixture, scenario: str
+) -> None:
+    """잘못된 JSON·본문·경로 입력의 원문을 응답과 이벤트 로그에서 제외한다."""
+    match scenario:
+        case "invalid-type":
+            response = client.post("/validation", json={"count": "private question"})
+        case "invalid-json":
+            response = client.post(
                 "/validation",
-                {
-                    "content": '{"count": "private question"',
-                    "headers": {"Content-Type": "application/json"},
-                },
-            ),
-            ("/error/not-a-code", None),
-        ):
-            with self.subTest(path=path), self.assertLogs("app.events") as logs:
-                response = (
-                    client.get(path)
-                    if arguments is None
-                    else client.post(path, **arguments)
-                )
-            self.assertEqual(response.status_code, 422)
-            self.assertEqual(response.json()["error"]["code"], "INVALID_INPUT")
-            self.assertNotIn("private question", response.text)
-            self.assertNotIn("private question", "\n".join(logs.output))
-            self.assertEqual(
-                response.json()["error"]["request_id"], response.headers["X-Request-ID"]
+                content='{"count": "private question"',
+                headers={"Content-Type": "application/json"},
             )
-
-    def test_auth_error_keeps_challenge_header(self) -> None:
-        """인증 원문을 감추면서 인증 프로토콜에 필요한 헤더는 유지한다."""
-        client = TestClient(_test_app())
-        with self.assertLogs("app.events") as logs:
-            response = client.get("/unauthorized")
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json()["error"]["code"], "UNAUTHORIZED")
-        self.assertEqual(response.headers["WWW-Authenticate"], "Bearer")
-        self.assertNotIn("private authentication detail", response.text)
-        self.assertNotIn("private authentication detail", "\n".join(logs.output))
-
-    def test_database_error_redacts_sql_and_parameters(self) -> None:
-        """DB 오류의 SQL·매개변수·원본 메시지를 출력하지 않는다."""
-        client = TestClient(_test_app())
-        with self.assertLogs("app.events") as logs:
-            response = client.get("/database-error")
-        self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json()["error"]["code"], "DB_ERROR")
-        formatter = EventLogFormatter()
-        rendered = "\n".join(formatter.format(record) for record in logs.records)
-        self.assertNotIn("private", response.text + rendered)
-        failed = [json.loads(line) for line in rendered.splitlines()]
-        self.assertTrue(any(item["event"] == "db_failed" for item in failed))
-
-    def test_unexpected_error_is_logged_and_reraised(self) -> None:
-        """명세에 없는 예외를 DB 오류로 오분류하지 않고 원문 없는 로그를 남긴다."""
-        client = TestClient(_test_app())
-        with self.assertLogs("app.events") as logs, self.assertRaises(RuntimeError):
-            client.get("/unexpected-error")
-        self.assertEqual(logs.records[-1].getMessage(), "request_failed")
-        self.assertEqual(logs.records[-1].exception_type, "RuntimeError")
-        self.assertNotIn("private runtime detail", "\n".join(logs.output))
-
-    def test_existing_internal_error_has_matching_request_id(self) -> None:
-        """main의 일반 서버 오류 응답과 AI 요청 로그의 식별자가 일치한다."""
-        client = TestClient(_test_app(), raise_server_exceptions=False)
-        with self.assertLogs("app.events") as logs:
-            response = client.get("/unexpected-error")
-        self.assertEqual(response.status_code, 500)
-        error = response.json()["error"]
-        self.assertEqual(error["code"], "INTERNAL_ERROR")
-        self.assertEqual(error["request_id"], response.headers["X-Request-ID"])
-        self.assertEqual(UUID(error["request_id"]).version, 4)
-        self.assertTrue(
-            all(record.request_id == error["request_id"] for record in logs.records)
-        )
-        self.assertEqual(logs.records[-1].error_code, "INTERNAL_ERROR")
-        self.assertNotIn("private runtime detail", response.text)
-
-    def test_existing_admin_routes_keep_error_contract(self) -> None:
-        """설정 파일을 읽지 않고 실제 관리자 라우터와 오류 형식을 검증한다."""
-        from app.api.v1.admin_deps import get_admin_service
-        from app.main import app
-        from app.repositories.admin_mock import (
-            MockChatLogRepository,
-            MockSessionRepository,
-            MockUserRepository,
-        )
-        from app.repositories.admin_system_log import SystemLogFileRepository
-        from app.services.admin_service import AdminService
-
-        with TemporaryDirectory() as directory:
-            service = AdminService(
-                users=MockUserRepository(),
-                chat_logs=MockChatLogRepository(),
-                sessions=MockSessionRepository(),
-                system_logs=SystemLogFileRepository(
-                    str(Path(directory) / "system.jsonl")
-                ),
-            )
-            app.dependency_overrides[get_admin_service] = lambda: service
-            try:
-                client = TestClient(app)
-                with self.assertLogs("app.events") as logs:
-                    listing = client.get("/admin/users")
-                    missing = client.get("/admin/users/9999")
-                self.assertEqual(listing.status_code, 200)
-                self.assertGreaterEqual(listing.json()["total"], 1)
-                self.assertEqual(missing.status_code, 404)
-                error = missing.json()["error"]
-                self.assertEqual(error["code"], "USER_NOT_FOUND")
-                self.assertEqual(error["request_id"], missing.headers["X-Request-ID"])
-                received = [
-                    record
-                    for record in logs.records
-                    if record.getMessage() == "request_received"
-                ]
-                self.assertEqual(len(received), 2)
-                self.assertEqual(logs.records[-1].error_code, "USER_NOT_FOUND")
-            finally:
-                app.dependency_overrides.pop(get_admin_service)
+        case "invalid-path":
+            response = client.get("/error/not-a-code")
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_INPUT"
+    assert "private question" not in response.text
+    assert "private question" not in event_logs.text
+    assert response.json()["error"]["request_id"] == response.headers["X-Request-ID"]
 
 
-class RequestIsolationTests(unittest.IsolatedAsyncioTestCase):
-    """동시 요청과 실제 앱의 DB 의존성 연결을 확인한다."""
+def test_auth_error_keeps_challenge_header(
+    client: TestClient, event_logs: pytest.LogCaptureFixture
+) -> None:
+    """인증 원문을 감추면서 인증 프로토콜에 필요한 헤더는 유지한다."""
+    response = client.get("/unauthorized")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    assert "private authentication detail" not in response.text
+    assert "private authentication detail" not in event_logs.text
 
-    async def test_concurrent_requests_keep_separate_contexts(self) -> None:
-        """동시에 실행된 요청의 식별자가 서로 섞이지 않고 종료 후 정리된다."""
+
+def test_database_error_redacts_sql_and_parameters(
+    client: TestClient, event_logs: pytest.LogCaptureFixture
+) -> None:
+    """DB 오류의 SQL·매개변수·원본 메시지를 출력하지 않는다."""
+    response = client.get("/database-error")
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "DB_ERROR"
+    formatter = EventLogFormatter()
+    rendered = "\n".join(formatter.format(record) for record in event_logs.records)
+    assert "private" not in response.text + rendered
+    failed = [json.loads(line) for line in rendered.splitlines()]
+    assert any(item["event"] == "db_failed" for item in failed)
+
+
+def test_unexpected_error_is_logged_and_reraised(
+    client: TestClient, event_logs: pytest.LogCaptureFixture
+) -> None:
+    """명세에 없는 예외를 DB 오류로 오분류하지 않고 원문 없는 로그를 남긴다."""
+    with pytest.raises(RuntimeError):
+        client.get("/unexpected-error")
+    assert event_logs.records[-1].getMessage() == "request_failed"
+    assert event_logs.records[-1].exception_type == "RuntimeError"
+    assert "private runtime detail" not in event_logs.text
+
+
+def test_existing_internal_error_has_matching_request_id(
+    event_logs: pytest.LogCaptureFixture,
+) -> None:
+    """main의 일반 서버 오류 응답과 AI 요청 로그의 식별자가 일치한다."""
+    with TestClient(_test_app(), raise_server_exceptions=False) as client:
+        response = client.get("/unexpected-error")
+    assert response.status_code == 500
+    error = response.json()["error"]
+    assert error["code"] == "INTERNAL_ERROR"
+    assert error["request_id"] == response.headers["X-Request-ID"]
+    assert UUID(error["request_id"]).version == 4
+    assert all(
+        record.request_id == error["request_id"] for record in event_logs.records
+    )
+    assert event_logs.records[-1].error_code == "INTERNAL_ERROR"
+    assert "private runtime detail" not in response.text
+
+
+def test_existing_admin_routes_keep_error_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    event_logs: pytest.LogCaptureFixture,
+) -> None:
+    """설정 파일을 읽지 않고 실제 관리자 라우터와 오류 형식을 검증한다."""
+    from app.api.v1.admin_deps import get_admin_service
+    from app.main import app
+    from app.repositories.admin_mock import (
+        MockChatLogRepository,
+        MockSessionRepository,
+        MockUserRepository,
+    )
+    from app.repositories.admin_system_log import SystemLogFileRepository
+    from app.services.admin_service import AdminService
+
+    service = AdminService(
+        users=MockUserRepository(),
+        chat_logs=MockChatLogRepository(),
+        sessions=MockSessionRepository(),
+        system_logs=SystemLogFileRepository(str(tmp_path / "system.jsonl")),
+    )
+    monkeypatch.setitem(app.dependency_overrides, get_admin_service, lambda: service)
+    client = TestClient(app)
+    try:
+        listing = client.get("/admin/users")
+        missing = client.get("/admin/users/9999")
+    finally:
+        client.close()
+    assert listing.status_code == 200
+    assert listing.json()["total"] >= 1
+    assert missing.status_code == 404
+    error = missing.json()["error"]
+    assert error["code"] == "USER_NOT_FOUND"
+    assert error["request_id"] == missing.headers["X-Request-ID"]
+    received = [
+        record
+        for record in event_logs.records
+        if record.getMessage() == "request_received"
+    ]
+    assert len(received) == 2
+    assert event_logs.records[-1].error_code == "USER_NOT_FOUND"
+
+
+def test_concurrent_requests_keep_separate_contexts(
+    event_logs: pytest.LogCaptureFixture,
+) -> None:
+    """동시에 실행된 요청의 식별자가 서로 섞이지 않고 종료 후 정리된다."""
+
+    async def run() -> None:
         transport = ASGITransport(app=_test_app())
-        with self.assertLogs("app.events") as logs:
-            async with AsyncClient(
-                transport=transport, base_url="http://test"
-            ) as client:
-                responses = await asyncio.gather(
-                    *(client.get("/identity") for _ in range(8))
-                )
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            responses = await asyncio.gather(
+                *(client.get("/identity") for _ in range(8))
+            )
         ids = {response.json()["request_id"] for response in responses}
-        self.assertEqual(len(ids), 8)
+        assert len(ids) == 8
         for response in responses:
-            self.assertEqual(
-                response.json()["request_id"], response.json()["context_id"]
-            )
-        self.assertEqual({record.request_id for record in logs.records}, ids)
-        self.assertIsNone(request_id_context.get())
+            assert response.json()["request_id"] == response.json()["context_id"]
+        assert {record.request_id for record in event_logs.records} == ids
+        assert request_id_context.get() is None
 
-    async def test_context_is_reset_after_exception(self) -> None:
-        """예외 발생 후에도 호출자의 요청 컨텍스트가 비어 있는지 확인한다."""
+    asyncio.run(run())
+
+
+def test_context_is_reset_after_exception(event_logs: pytest.LogCaptureFixture) -> None:
+    """예외 발생 후에도 호출자의 요청 컨텍스트가 비어 있는지 확인한다."""
+
+    async def run() -> None:
         transport = ASGITransport(app=_test_app())
-        with self.assertLogs("app.events"), self.assertRaises(RuntimeError):
+        with pytest.raises(RuntimeError):
             async with AsyncClient(
                 transport=transport, base_url="http://test"
             ) as client:
                 await client.get("/unexpected-error")
-        self.assertIsNone(request_id_context.get())
+        assert request_id_context.get() is None
 
-    async def test_application_health_with_isolated_database(self) -> None:
-        """앱의 공통 처리와 DB 별칭이 실제 SQLite 세션으로 동작하는지 확인한다."""
-        from app.main import app
+    asyncio.run(run())
+    assert event_logs.records[-1].getMessage() == "request_failed"
 
+
+def test_application_health_with_isolated_database(
+    event_logs: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """앱의 공통 처리와 DB 별칭이 실제 SQLite 세션으로 동작하는지 확인한다."""
+    from app.main import app
+
+    async def run() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         factory = async_sessionmaker(engine)
 
@@ -270,16 +316,18 @@ class RequestIsolationTests(unittest.IsolatedAsyncioTestCase):
             async with factory() as session:
                 yield session
 
-        app.dependency_overrides[get_db] = test_db
         try:
-            with self.assertLogs("app.events"):
+            with monkeypatch.context() as context:
+                context.setitem(app.dependency_overrides, get_db, test_db)
                 async with AsyncClient(
                     transport=ASGITransport(app=app), base_url="http://test"
                 ) as client:
                     response = await client.get("/health")
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"status": "ok"})
-            self.assertEqual(UUID(response.headers["X-Request-ID"]).version, 4)
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok"}
+            assert UUID(response.headers["X-Request-ID"]).version == 4
         finally:
-            app.dependency_overrides.pop(get_db)
             await engine.dispose()
+
+    asyncio.run(run())
+    assert event_logs.records
