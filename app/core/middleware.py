@@ -57,6 +57,8 @@ class RequestContextMiddleware:
         except Exception as exc:
             log_event(
                 "request_failed",
+                user_id=_user_id(scope),
+                chat_id=scope["state"].get("chat_id"),
                 result="failure",
                 error_code="INTERNAL_ERROR",
                 http_status=500,
@@ -67,6 +69,8 @@ class RequestContextMiddleware:
         else:
             log_event(
                 "request_completed",
+                user_id=_user_id(scope),
+                chat_id=scope["state"].get("chat_id"),
                 result="success" if status_code < 400 else "failure",
                 error_code=scope["state"].get("error_code"),
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
@@ -74,3 +78,8 @@ class RequestContextMiddleware:
             )
         finally:
             request_id_context.reset(token)
+
+
+def _user_id(scope: Scope) -> str | None:
+    value = scope["state"].get("user_id")
+    return str(value) if value is not None else None

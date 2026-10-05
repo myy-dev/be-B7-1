@@ -13,6 +13,7 @@ from app.schemas.chat import (
     ChatDetailResponse,
     ChatListResponse,
     ChatResponse,
+    MessageCreateRequest,
     MessageResponse,
 )
 from app.schemas.error import ErrorResponse
@@ -94,6 +95,20 @@ class ChatSchemaTests(unittest.TestCase):
         )
         with self.assertRaises(ValidationError):
             ChatResponse(chat_id=chat_id, created_at="2026-10-03T07:00:00")
+
+    def test_question_is_trimmed_without_changing_content(self) -> None:
+        """앞뒤 공백은 제거하고 질문 본문의 공백과 개행은 유지한다."""
+        request = MessageCreateRequest(question=" \t FastAPI  질문\n두 번째 줄 \n")
+        self.assertEqual(request.question, "FastAPI  질문\n두 번째 줄")
+
+    def test_empty_missing_and_non_string_questions_are_rejected(self) -> None:
+        """빈 질문·누락·문자열이 아닌 질문을 거절한다."""
+        questions = ["", " \t\n ", "\u2003", None, 1, True, [], {}]
+        for question in questions:
+            with self.subTest(question=question), self.assertRaises(ValidationError):
+                MessageCreateRequest.model_validate({"question": question})
+        with self.assertRaises(ValidationError):
+            MessageCreateRequest.model_validate({})
 
     @staticmethod
     def _pending_record() -> dict[str, object]:

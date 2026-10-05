@@ -9,6 +9,7 @@ from pydantic import (
     AwareDatetime,
     BaseModel,
     ConfigDict,
+    StringConstraints,
     model_validator,
 )
 
@@ -17,6 +18,12 @@ from app.schemas.error import ErrorCode
 
 UTCDateTime = Annotated[AwareDatetime, AfterValidator(to_utc)]
 MessageStatus = Literal["pending", "completed", "failed"]
+
+
+class MessageCreateRequest(BaseModel):
+    """질문의 앞뒤 공백을 제거하고 비어 있지 않은 입력을 받는다."""
+
+    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class ChatResponse(BaseModel):
@@ -58,26 +65,28 @@ class MessageResponse(BaseModel):
         Raises:
             ValueError: 필드 값이 처리 상태와 일치하지 않는 경우.
         """
-        if self.status == "pending":
-            if any(
-                value is not None
-                for value in (self.answer, self.error_code, self.finished_at)
-            ):
-                raise ValueError("처리 중인 기록의 결과 필드는 null이어야 합니다.")
-        elif self.status == "completed":
-            if (
-                self.answer is None
-                or not self.answer.strip()
-                or self.error_code is not None
-                or self.finished_at is None
-            ):
-                raise ValueError("완료 기록에는 답변과 종료 시각이 필요합니다.")
-        elif (
-            self.answer is not None
-            or self.error_code is None
-            or self.finished_at is None
-        ):
-            raise ValueError("실패 기록에는 오류 코드와 종료 시각이 필요합니다.")
+        match self.status:
+            case "pending":
+                if any(
+                    value is not None
+                    for value in (self.answer, self.error_code, self.finished_at)
+                ):
+                    raise ValueError("처리 중인 기록의 결과 필드는 null이어야 합니다.")
+            case "completed":
+                if (
+                    self.answer is None
+                    or not self.answer.strip()
+                    or self.error_code is not None
+                    or self.finished_at is None
+                ):
+                    raise ValueError("완료 기록에는 답변과 종료 시각이 필요합니다.")
+            case "failed":
+                if (
+                    self.answer is not None
+                    or self.error_code is None
+                    or self.finished_at is None
+                ):
+                    raise ValueError("실패 기록에는 오류 코드와 종료 시각이 필요합니다.")
         return self
 
 
