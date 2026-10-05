@@ -72,10 +72,12 @@ uv sync --locked
 ```dotenv
 OPENAI_API_KEY=발급받은_API_키
 OPENAI_MODEL=GPT 모델
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
 - OpenAI 기능 사용 시 필요하며, 현재 서버 실행 확인에는 키가 없어도 됩니다.
 - 모델을 바꾸려면 `OPENAI_MODEL=사용할_모델_ID`를 추가합니다.
+- `CORS_ORIGINS`는 브라우저가 허용할 프론트엔드 주소입니다. 쉼표로 여러 개를 적고, 기본값은 프론트 개발 서버(`localhost:5173`)입니다. 배포 시 실제 프론트 주소로 바꿉니다.
 - `.env`는 커밋하지 않습니다.
 
 ## 5. 서버 실행

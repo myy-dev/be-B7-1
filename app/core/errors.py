@@ -8,7 +8,9 @@ AppError를 던지고 여기 핸들러가 상태 코드와 본문으로 바꾼�
 """
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 class AppError(Exception):
@@ -38,6 +40,36 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     )
 
 
+async def validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content=error_body(request, "INVALID_INPUT", "요청 값이 올바르지 않습니다."),
+    )
+
+
+async def http_error_handler(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    # 라우터 밖(없는 경로·허용 안 된 메서드)에서 나는 오류도 같은 형식으로 맞춘다.
+    message = (
+        exc.detail if isinstance(exc.detail, str) else "요청을 처리하지 못했습니다."
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_body(request, http_status_code(exc.status_code), message),
+    )
+
+
+def http_status_code(status: int) -> str:
+    if status == 404:
+        return "NOT_FOUND"
+    if status == 405:
+        return "METHOD_NOT_ALLOWED"
+    return "HTTP_ERROR"
+
+
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=500,
@@ -47,4 +79,6 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, app_error_handler)
+    app.add_exception_handler(RequestValidationError, validation_error_handler)
+    app.add_exception_handler(StarletteHTTPException, http_error_handler)
     app.add_exception_handler(Exception, unhandled_error_handler)

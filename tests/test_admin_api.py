@@ -297,3 +297,56 @@ def test_system_logs_reversed_period_returns_empty_page(file_client):
     body = response.json()
     assert body["items"] == []
     assert body["total"] == 0
+
+
+def test_validation_error_uses_common_error_shape():
+    # 422도 FastAPI 기본 형식(detail)이 아니라 공통 오류 형식으로 나가는지 확인한다.
+    # (프론트가 error.message로 사용자 문구를 꺼내는 계약)
+    res = client.get("/api/v1/admin/users", params={"page": 0})
+    assert res.status_code == 422
+    error = res.json()["error"]
+    assert error["code"] == "INVALID_INPUT"
+    assert isinstance(error["message"], str) and error["message"]
+    assert isinstance(error["request_id"], str) and error["request_id"]
+    assert "detail" not in res.json()
+
+
+def test_admin_paths_use_api_v1_prefix():
+    # 관리자 경로가 /api/v1 접두어 아래에 있고, 접두어 없는 구 경로는 404인지 확인한다.
+    assert client.get("/api/v1/admin/users").status_code == 200
+    assert client.get("/admin/users").status_code == 404
+
+
+def test_cors_allows_configured_origin():
+    # 허용된 프론트 오리진에는 CORS 응답 헤더가 붙는지 확인한다.
+    res = client.get("/api/v1/admin/users", headers={"Origin": "http://localhost:5173"})
+    assert res.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_cors_preflight_allows_authorization_header():
+    # 프리플라이트가 Authorization 헤더를 허용해 실연결 시 막히지 않는지 확인한다.
+    res = client.options(
+        "/api/v1/admin/users",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert res.status_code == 200
+    assert res.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    allowed = res.headers.get("access-control-allow-headers", "")
+    assert "authorization" in allowed.lower()
+
+
+def test_cors_blocks_unconfigured_origin():
+    # 허용 목록에 없는 오리진에는 allow-origin 헤더를 주지 않는지 확인한다.
+    res = client.get("/api/v1/admin/users", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in res.headers
+
+
+def test_unknown_path_uses_common_error_shape():
+    # 없는 경로(라우터 밖)의 404도 공통 오류 형식으로 나가는지 확인한다.
+    res = client.get("/api/v1/nope")
+    assert res.status_code == 404
+    assert res.json()["error"]["code"] == "NOT_FOUND"
