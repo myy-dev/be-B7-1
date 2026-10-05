@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
@@ -14,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import event, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -23,12 +24,14 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_ai_client, get_current_user_id
 from app.api.v1.router import router
+from app.clients.ai import AIClient
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
-from app.core.errors import configure_request_processing
+from app.core.errors import APIError, configure_request_processing
 from app.models.chat import Chat, ChatLog
 from app.repositories.chat import ChatRepository
+from app.schemas.error import ErrorCode
 
 
 @dataclass
@@ -415,3 +418,219 @@ asyncio.run(verify_startup())
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _mock_ai(chat_api: _ChatAPI) -> MagicMock:
+    ai = MagicMock(spec=AIClient)
+    ai.model = "test-model"
+    ai.generate_answer = AsyncMock(return_value="AI 답변")
+    chat_api.app.dependency_overrides[get_ai_client] = lambda: ai
+    return ai
+
+
+def _messages(chat_api: _ChatAPI) -> list[ChatLog]:
+    async def read() -> list[ChatLog]:
+        async with chat_api.sessions() as session:
+            return list((await session.scalars(select(ChatLog))).all())
+
+    return asyncio.run(read())
+
+
+def test_question_answer_is_committed_and_reused_as_context(
+    chat_api: _ChatAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """질문이 AI 호출 전에 저장되고 답변은 다음 질문의 문맥으로 전달된다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    chat_id = chat_api.client.post("/api/v1/chats").json()["chat_id"]
+    original = ChatRepository.save_message
+    sessions: list[AsyncSession] = []
+
+    async def save(repository: ChatRepository, message: ChatLog) -> ChatLog:
+        sessions.append(repository.session)
+        return await original(repository, message)
+
+    monkeypatch.setattr(ChatRepository, "save_message", save)
+
+    async def answer(question: str, history: list[tuple[str, str]]) -> str:
+        assert not sessions[-1].in_transaction()
+        async with chat_api.sessions() as session:
+            pending = list((await session.scalars(
+                select(ChatLog).where(ChatLog.status == "pending")
+            )).all())
+            assert len(pending) == 1
+            assert pending[0].question == question
+            assert pending[0].answer is pending[0].finished_at is None
+        return "AI 답변"
+
+    ai.generate_answer.side_effect = answer
+    first = chat_api.client.post(
+        f"/api/v1/chats/{chat_id}/messages", json={"question": "  첫 질문  "}
+    )
+    assert first.status_code == 201
+    body = first.json()
+    assert body["question"] == "첫 질문"
+    assert body["answer"] == "AI 답변"
+    assert body["status"] == "completed"
+    assert body["error_code"] is None
+    assert body["finished_at"] is not None
+    assert body["request_id"] == first.headers["X-Request-ID"]
+    assert chat_api.client.get(f"/api/v1/chats/{chat_id}").json()["messages"] == [body]
+    second = chat_api.client.post(
+        f"/api/v1/chats/{chat_id}/messages", json={"question": "다음 질문"}
+    )
+    assert second.status_code == 201
+    ai.generate_answer.assert_awaited_with("다음 질문", [("첫 질문", "AI 답변")])
+    assert first.headers["X-Request-ID"] != second.headers["X-Request-ID"]
+    assert len(_messages(chat_api)) == 2
+
+
+@pytest.mark.parametrize("question", ["", "  ", None, 123])
+def test_invalid_question_does_not_save_or_call_ai(
+    chat_api: _ChatAPI, question: object
+) -> None:
+    """빈 질문·잘못된 타입은 저장하거나 AI에 전달하지 않는다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    chat_id = chat_api.client.post("/api/v1/chats").json()["chat_id"]
+    response = chat_api.client.post(
+        f"/api/v1/chats/{chat_id}/messages", json={"question": question}
+    )
+    _assert_error(response, 422, "INVALID_INPUT")
+    ai.generate_answer.assert_not_awaited()
+    assert _messages(chat_api) == []
+
+
+@pytest.mark.parametrize("other_owner", [False, True])
+def test_unowned_question_does_not_save_or_call_ai(
+    chat_api: _ChatAPI, other_owner: bool
+) -> None:
+    """타인 채팅방과 없는 채팅방에는 질문 기록을 만들지 않는다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    chat_id = UUID("00000000-0000-4000-8000-000000000001")
+    if other_owner:
+        chat_api.seed(Chat(chat_id=chat_id, user_id=chat_api.user_id + 1))
+    response = chat_api.client.post(
+        f"/api/v1/chats/{chat_id}/messages", json={"question": "질문"}
+    )
+    _assert_error(response, 404, "CHAT_NOT_FOUND")
+    ai.generate_answer.assert_not_awaited()
+    assert _messages(chat_api) == []
+
+
+def test_question_requires_auth_before_ai_settings(chat_api: _ChatAPI) -> None:
+    """질문 전송도 실제 인증 연결 전에는 AI 설정 조회 없이 거절한다."""
+    response = chat_api.client.post(
+        "/api/v1/chats/00000000-0000-4000-8000-000000000001/messages",
+        json={"question": "질문"},
+    )
+    _assert_error(response, 401, "UNAUTHORIZED")
+
+
+@pytest.mark.parametrize(
+    ("code", "status_code"),
+    [("AI_TIMEOUT", 504), ("AI_UNAVAILABLE", 502), ("AI_CONFIGURATION_ERROR", 503)],
+)
+def test_ai_failure_preserves_failed_question(
+    chat_api: _ChatAPI, code: ErrorCode, status_code: int
+) -> None:
+    """AI 실패 뒤 질문을 유지하고 같은 요청 ID에 실패 결과를 저장한다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    ai.generate_answer.side_effect = APIError(code)
+    chat_id = chat_api.client.post("/api/v1/chats").json()["chat_id"]
+    response = chat_api.client.post(
+        f"/api/v1/chats/{chat_id}/messages", json={"question": "질문"}
+    )
+    _assert_error(response, status_code, code)
+    message = chat_api.client.get(f"/api/v1/chats/{chat_id}").json()["messages"][0]
+    assert message["request_id"] == response.headers["X-Request-ID"]
+    assert message["question"] == "질문"
+    assert message["status"] == "failed"
+    assert message["error_code"] == code
+    assert message["answer"] is None
+    assert message["finished_at"] is not None
+
+
+def test_context_contains_only_last_five_completed_pairs(chat_api: _ChatAPI) -> None:
+    """문맥은 해당 채팅방의 최근 성공 기록 5개만 시간순으로 포함한다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    chat_id = UUID(chat_api.client.post("/api/v1/chats").json()["chat_id"])
+    other = UUID(chat_api.client.post("/api/v1/chats").json()["chat_id"])
+    moment = datetime(2026, 10, 5, tzinfo=UTC)
+    rows = [
+        ChatLog(
+            request_id=UUID(f"00000000-0000-4000-8000-{number:012x}"),
+            chat_id=chat_id, question=f"질문{number}", answer=f"답변{number}",
+            status="completed", model="test-model",
+            created_at=moment + timedelta(seconds=number), finished_at=moment,
+        )
+        for number in range(1, 8)
+    ]
+    rows.extend([
+        ChatLog(
+            request_id=UUID("00000000-0000-4000-8000-000000000008"),
+            chat_id=chat_id, question="실패 질문", status="failed", model="test-model",
+            error_code="AI_TIMEOUT", created_at=moment + timedelta(seconds=8),
+            finished_at=moment,
+        ),
+        ChatLog(
+            request_id=UUID("00000000-0000-4000-8000-000000000009"),
+            chat_id=chat_id, question="진행 중", status="pending", model="test-model",
+            created_at=moment + timedelta(seconds=9),
+        ),
+        ChatLog(
+            request_id=UUID("00000000-0000-4000-8000-00000000000a"),
+            chat_id=other, question="다른 방", answer="다른 답변",
+            status="completed", model="test-model", created_at=moment,
+            finished_at=moment,
+        ),
+    ])
+    chat_api.seed(*rows)
+    response = chat_api.client.post(
+        f"/api/v1/chats/{chat_id}/messages", json={"question": "현재 질문"}
+    )
+    assert response.status_code == 201
+    ai.generate_answer.assert_awaited_once_with(
+        "현재 질문", [(f"질문{n}", f"답변{n}") for n in range(3, 8)]
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure_at", "ai_failure"), [(1, False), (2, False), (2, True)]
+)
+def test_question_or_answer_save_failure_never_returns_success(
+    chat_api: _ChatAPI, monkeypatch: pytest.MonkeyPatch,
+    failure_at: int, ai_failure: bool,
+) -> None:
+    """질문 저장 실패는 AI 호출을 막고 답변 저장 실패는 성공을 반환하지 않는다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    if ai_failure:
+        ai.generate_answer.side_effect = APIError("AI_UNAVAILABLE")
+    chat_id = chat_api.client.post("/api/v1/chats").json()["chat_id"]
+    original = ChatRepository.save_message
+    calls = 0
+
+    async def fail_save(repository: ChatRepository, message: ChatLog) -> ChatLog:
+        nonlocal calls
+        calls += 1
+        if calls == failure_at:
+            raise OperationalError("hidden sql", {}, Exception("hidden error"))
+        return await original(repository, message)
+
+    monkeypatch.setattr(ChatRepository, "save_message", fail_save)
+    response = chat_api.client.post(
+        f"/api/v1/chats/{chat_id}/messages", json={"question": "질문"}
+    )
+    _assert_error(response, 500, "DB_ERROR")
+    assert ai.generate_answer.await_count == failure_at - 1
+    saved = _messages(chat_api)
+    if failure_at == 1:
+        assert saved == []
+    else:
+        assert len(saved) == 1
+        assert saved[0].status == "pending"
+        assert saved[0].answer is None

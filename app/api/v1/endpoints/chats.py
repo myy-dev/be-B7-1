@@ -2,11 +2,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Request, status
 
-from app.api.dependencies import ChatServiceDep, CurrentUserId
+from app.api.dependencies import AIClientDep, ChatServiceDep, CurrentUserId, RequestId
 from app.schemas.chat import (
     ChatDetailResponse,
     ChatListResponse,
     ChatResponse,
+    MessageCreateRequest,
+    MessageResponse,
 )
 
 router = APIRouter(prefix="/api/v1/chats", tags=["chats"])
@@ -66,3 +68,37 @@ async def get_chat(
     """
     request.state.chat_id = chat_id
     return await service.get_chat(chat_id, user_id)
+
+
+@router.post(
+    "/{chat_id}/messages",
+    response_model=MessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def send_message(
+    chat_id: UUID,
+    body: MessageCreateRequest,
+    request: Request,
+    user_id: CurrentUserId,
+    request_id: RequestId,
+    service: ChatServiceDep,
+    ai_client: AIClientDep,
+) -> MessageResponse:
+    """현재 사용자의 질문을 보내고 저장을 마친 AI 답변을 반환한다.
+
+    Args:
+        chat_id: 질문을 보낼 채팅방의 UUID.
+        body: 검증을 마친 질문 본문.
+        request: 현재 HTTP 요청.
+        user_id: 인증된 사용자 ID.
+        request_id: 서버에서 생성한 질문 요청의 UUID4.
+        service: 질문과 답변 저장을 처리할 서비스.
+        ai_client: 답변을 생성할 AI 클라이언트.
+
+    Returns:
+        저장을 마친 질문·답변 한 건.
+    """
+    request.state.chat_id = chat_id
+    return await service.send_message(
+        chat_id, user_id, request_id, body.question, ai_client
+    )
