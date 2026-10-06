@@ -16,6 +16,9 @@ class Base(DeclarativeBase):
 
 
 async def create_db_and_tables() -> None:
+    # create_all 전에 모델을 등록한다. 라우터의 import 순서에 의존하지 않는다.
+    from app.models import user  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

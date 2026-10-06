@@ -16,6 +16,7 @@ make todos
 - [시작하기](docs/GETTING_STARTED.md)
 - [관리자 파트](docs/admin.md)
 - [시스템 로그](docs/system-logs.md)
+- [회원가입 API](docs/auth.md)
 
 ## 저장소
 - 백엔드: https://github.com/myy-dev/be-B7-1
