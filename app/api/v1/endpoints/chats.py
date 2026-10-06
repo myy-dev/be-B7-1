@@ -11,7 +11,7 @@ from app.schemas.chat import (
     MessageResponse,
 )
 
-router = APIRouter(prefix="/api/v1/chats", tags=["chats"])
+router = APIRouter(prefix="/chats", tags=["chats"])
 
 
 @router.post("", response_model=ChatResponse, status_code=status.HTTP_201_CREATED)

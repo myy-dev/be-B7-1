@@ -8,7 +8,6 @@ AppError를 던지고 여기 핸들러가 상태 코드와 본문으로 바꾼�
 """
 
 from fastapi import FastAPI, Request
-from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
@@ -110,6 +109,44 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     )
 
 
+async def http_error_handler(
+    request: Request, exc: HTTPException
+) -> JSONResponse:
+    """경로·메서드 등 일반 HTTP 오류를 공통 형식으로 반환한다.
+
+    Args:
+        request: 현재 HTTP 요청.
+        exc: 라우팅 또는 HTTP 처리에서 발생한 오류.
+
+    Returns:
+        상태 코드·안내 문구·요청 식별자를 포함한 응답.
+    """
+    message = (
+        exc.detail if isinstance(exc.detail, str) else "요청을 처리하지 못했습니다."
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_body(request, http_status_code(exc.status_code), message),
+        headers=exc.headers,
+    )
+
+
+def http_status_code(status: int) -> str:
+    """일반 HTTP 상태에 대응하는 공통 오류 코드를 반환한다.
+
+    Args:
+        status: HTTP 오류 상태 코드.
+
+    Returns:
+        상태에 대응하는 오류 식별자.
+    """
+    if status == 404:
+        return "NOT_FOUND"
+    if status == 405:
+        return "METHOD_NOT_ALLOWED"
+    return "HTTP_ERROR"
+
+
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """처리하지 못한 예외의 원문을 제외하고 내부 오류 응답을 반환한다.
 
@@ -194,14 +231,14 @@ async def handle_database_error(request: Request, exc: SQLAlchemyError) -> JSONR
 
 
 async def handle_http_error(request: Request, exc: HTTPException) -> Response:
-    """인증·입력 HTTP 오류를 변환하고 다른 HTTP 오류는 기존 처리에 맡긴다.
+    """인증·입력 오류를 명세에 맞추고 다른 HTTP 오류도 공통 형식으로 반환한다.
 
     Args:
         request: 현재 HTTP 요청.
         exc: 인증 의존성 등의 HTTP 오류.
 
     Returns:
-        공통 오류 응답 또는 기본 HTTP 오류 응답.
+        HTTP 상태와 요청 식별자를 포함한 공통 오류 응답.
     """
     code: ErrorCode
     if exc.status_code == 401:
@@ -209,7 +246,7 @@ async def handle_http_error(request: Request, exc: HTTPException) -> Response:
     elif exc.status_code == 422:
         code = "INVALID_INPUT"
     else:
-        return await http_exception_handler(request, exc)
+        return await http_error_handler(request, exc)
     return _error_response(
         request, code, exception_type=type(exc).__name__, headers=exc.headers
     )

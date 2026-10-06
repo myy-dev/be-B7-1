@@ -246,8 +246,8 @@ def test_existing_admin_routes_keep_error_contract(
     monkeypatch.setitem(app.dependency_overrides, get_admin_service, lambda: service)
     client = TestClient(app)
     try:
-        listing = client.get("/admin/users")
-        missing = client.get("/admin/users/9999")
+        listing = client.get("/api/v1/admin/users")
+        missing = client.get("/api/v1/admin/users/9999")
     finally:
         client.close()
     assert listing.status_code == 200

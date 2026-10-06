@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from app.api.dependencies import get_ai_client, get_current_user_id
-from app.api.v1.router import router
+from app.api.v1.router import api_router, health_router
 from app.clients.ai import AIClient
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
 from app.core.errors import APIError, configure_request_processing
@@ -86,7 +86,8 @@ def chat_api() -> Iterator[_ChatAPI]:
     asyncio.run(create_tables())
     app = FastAPI()
     configure_request_processing(app)
-    app.include_router(router)
+    app.include_router(health_router)
+    app.include_router(api_router, prefix="/api/v1")
 
     async def test_db() -> AsyncGenerator[AsyncSession, None]:
         async with sessions() as session:
@@ -396,7 +397,11 @@ with patch.object(sa_async, "create_async_engine", return_value=test_engine):
 
 assert engine is test_engine
 assert not Base.metadata.tables
-from app.main import app, lifespan
+from app.core.config import Settings
+with patch("app.core.config.get_settings", return_value=Settings(
+    _env_file=None, openai_api_key="test-only"
+)):
+    from app.main import app, lifespan
 
 async def verify_startup():
     async with lifespan(app):

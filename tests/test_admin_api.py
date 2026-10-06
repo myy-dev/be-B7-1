@@ -26,7 +26,7 @@ client = TestClient(app)
 
 def test_admin_route_passes_with_mock_gate():
     # 인증은 아직 mock 통과(개발용)라, 게이트가 요청을 막지 않는지 확인한다.
-    assert client.get("/admin/users").status_code == 200
+    assert client.get("/api/v1/admin/users").status_code == 200
 
 
 def test_health():
@@ -36,7 +36,7 @@ def test_health():
 
 def test_list_users_returns_page():
     # 회원 목록이 공통 페이지 형태(items·total·page·size)로 오는지 확인한다.
-    res = client.get("/admin/users")
+    res = client.get("/api/v1/admin/users")
     assert res.status_code == 200
     body = res.json()
     assert set(body) >= {"items", "total", "page", "size"}
@@ -46,8 +46,8 @@ def test_list_users_returns_page():
 def test_list_users_slices_by_page():
     # 페이지마다 다른 항목이 오고, total은 전체 수로 일정한지 확인한다.
     # (저장소가 실제로 자르는지 — 이전에 mock이 페이지를 무시하던 회귀 방지)
-    first = client.get("/admin/users", params={"page": 1, "size": 1}).json()
-    second = client.get("/admin/users", params={"page": 2, "size": 1}).json()
+    first = client.get("/api/v1/admin/users", params={"page": 1, "size": 1}).json()
+    second = client.get("/api/v1/admin/users", params={"page": 2, "size": 1}).json()
     assert len(first["items"]) == 1
     assert len(second["items"]) == 1
     assert first["items"][0]["id"] != second["items"][0]["id"]
@@ -56,14 +56,14 @@ def test_list_users_slices_by_page():
 
 def test_user_detail_serializes_only_declared_fields():
     # 응답이 스키마에 선언한 필드만 나가는지(민감 필드 노출 차단) 확인한다.
-    detail = client.get("/admin/users/1").json()
+    detail = client.get("/api/v1/admin/users/1").json()
     assert set(detail) <= set(UserDetail.model_fields)
     assert "password" not in json.dumps(detail).lower()
 
 
 def test_get_user_not_found_returns_standard_error():
     # 없는 회원은 404와 공통 에러 형식(code·request_id)으로 오는지 확인한다.
-    res = client.get("/admin/users/9999")
+    res = client.get("/api/v1/admin/users/9999")
     assert res.status_code == 404
     error = res.json()["error"]
     assert error["code"] == "USER_NOT_FOUND"
@@ -72,16 +72,16 @@ def test_get_user_not_found_returns_standard_error():
 
 def test_list_logs_filters_by_user():
     # 대화 기록이 그 회원 소유 세션으로 걸러지는지 확인한다(기록은 chat_id로 묶임).
-    res = client.get("/admin/logs", params={"user_id": 1})
+    res = client.get("/api/v1/admin/logs", params={"user_id": 1})
     assert res.status_code == 200
     assert res.json()["total"] == 2
     # 소유 세션이 없는 회원은 0건이다.
-    assert client.get("/admin/logs", params={"user_id": 2}).json()["total"] == 0
+    assert client.get("/api/v1/admin/logs", params={"user_id": 2}).json()["total"] == 0
 
 
 def test_logs_return_record_fields():
     # 대화 기록이 request_id·status·error_code 등 기록 필드로 오는지 확인한다.
-    items = client.get("/admin/logs", params={"user_id": 1}).json()["items"]
+    items = client.get("/api/v1/admin/logs", params={"user_id": 1}).json()["items"]
     assert items
     expected = {
         "request_id",
@@ -100,17 +100,17 @@ def test_logs_return_record_fields():
 
 def test_sessions_and_detail():
     # 사용자 세션 목록 → 세션 상세(그 세션의 대화 포함) 흐름을 확인한다.
-    listing = client.get("/admin/sessions", params={"user_id": 1}).json()
+    listing = client.get("/api/v1/admin/sessions", params={"user_id": 1}).json()
     assert listing["total"] >= 1
     chat_id = listing["items"][0]["chat_id"]
-    detail = client.get(f"/admin/sessions/{chat_id}").json()
+    detail = client.get(f"/api/v1/admin/sessions/{chat_id}").json()
     assert detail["chat_id"] == chat_id
     assert isinstance(detail["messages"], list)
 
 
 def test_get_session_not_found():
     # 없는 세션은 404와 공통 에러 형식으로 오는지 확인한다.
-    res = client.get("/admin/sessions/9999")
+    res = client.get("/api/v1/admin/sessions/9999")
     assert res.status_code == 404
     assert res.json()["error"]["code"] == "SESSION_NOT_FOUND"
 
@@ -149,7 +149,9 @@ def file_client(sample_log_file):
 
 def test_system_logs_read_from_file_with_event_filter(file_client):
     # event로 거른 결과가 파일과 맞는지, 내부 정렬 키(_ts)가 안 나오는지 확인한다.
-    res = file_client.get("/admin/system-logs", params={"event": "ai_call_started"})
+    res = file_client.get(
+        "/api/v1/admin/system-logs", params={"event": "ai_call_started"}
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["total"] == 1
@@ -160,7 +162,7 @@ def test_system_logs_read_from_file_with_event_filter(file_client):
 
 def test_system_logs_sorted_newest_first(file_client):
     # 정렬은 항상 최신순이어야 한다(파일은 시간 오름차순으로 썼음).
-    body = file_client.get("/admin/system-logs").json()
+    body = file_client.get("/api/v1/admin/system-logs").json()
     events = [item["event"] for item in body["items"]]
     assert events == ["db_save_success", "ai_call_failed", "ai_call_started"]
 
@@ -199,7 +201,7 @@ def test_system_logs_skip_invalid_records(file_client, sample_log_file, invalid_
             )
             + "\n"
         )
-    response = file_client.get("/admin/system-logs")
+    response = file_client.get("/api/v1/admin/system-logs")
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == 4
@@ -210,7 +212,7 @@ def test_system_logs_skip_invalid_records(file_client, sample_log_file, invalid_
         "ai_call_started",
     ]
     filtered = file_client.get(
-        "/admin/system-logs",
+        "/api/v1/admin/system-logs",
         params={"level": "INFO", "start": "2026-09-30T06:30:00Z", "size": 1, "page": 2},
     )
     assert filtered.status_code == 200
@@ -227,7 +229,7 @@ def test_system_logs_only_invalid_records_return_empty_page(
         '{"timestamp":"bad","level":"INFO","event":"request_received"}\n',
         encoding="utf-8",
     )
-    response = file_client.get("/admin/system-logs")
+    response = file_client.get("/api/v1/admin/system-logs")
     assert response.status_code == 200
     assert response.json() == {"items": [], "total": 0, "page": 1, "size": 20}
 
@@ -240,12 +242,18 @@ def test_system_logs_full_flow_file_to_api(file_client, sample_log_file):
     before = hashlib.sha256(sample_log_file.read_bytes()).hexdigest()
 
     # 정상 3줄만, 최신순으로 나온다.
-    all_items = file_client.get("/admin/system-logs", params={"size": 100}).json()
+    all_items = file_client.get(
+        "/api/v1/admin/system-logs", params={"size": 100}
+    ).json()
     assert all_items["total"] == 3
 
     # 페이지를 나눠 받아 이어붙이면 전체 조회와 순서까지 일치한다.
-    page1 = file_client.get("/admin/system-logs", params={"size": 2, "page": 1}).json()
-    page2 = file_client.get("/admin/system-logs", params={"size": 2, "page": 2}).json()
+    page1 = file_client.get(
+        "/api/v1/admin/system-logs", params={"size": 2, "page": 1}
+    ).json()
+    page2 = file_client.get(
+        "/api/v1/admin/system-logs", params={"size": 2, "page": 2}
+    ).json()
     joined = [item["event"] for item in page1["items"]] + [
         item["event"] for item in page2["items"]
     ]
@@ -260,10 +268,10 @@ def test_system_logs_naive_period_filter_treated_as_utc(file_client):
     # 타임존 없는 입력은 UTC로 간주한다 — 타임존 있는 입력과 같은 결과가 나오고,
     # naive·aware 비교로 500이 나던 문제가 다시 생기지 않는지 확인한다.
     aware = file_client.get(
-        "/admin/system-logs", params={"start": "2026-09-30T06:30:00Z"}
+        "/api/v1/admin/system-logs", params={"start": "2026-09-30T06:30:00Z"}
     )
     naive = file_client.get(
-        "/admin/system-logs", params={"start": "2026-09-30T06:30:00"}
+        "/api/v1/admin/system-logs", params={"start": "2026-09-30T06:30:00"}
     )
     assert naive.status_code == 200
     assert naive.json() == aware.json()
@@ -273,7 +281,7 @@ def test_system_logs_naive_period_filter_treated_as_utc(file_client):
 def test_system_logs_period_filter_converts_offset_to_utc(file_client):
     # 타임존 있는 입력은 UTC로 환산해 비교한다(+09:00 15:30 == 06:30Z).
     response = file_client.get(
-        "/admin/system-logs", params={"start": "2026-09-30T15:30:00+09:00"}
+        "/api/v1/admin/system-logs", params={"start": "2026-09-30T15:30:00+09:00"}
     )
     assert response.status_code == 200
     assert response.json()["total"] == 1
@@ -282,10 +290,84 @@ def test_system_logs_period_filter_converts_offset_to_utc(file_client):
 def test_system_logs_reversed_period_returns_empty_page(file_client):
     # start가 end보다 뒤여도 500이 아니라 빈 페이지로 끝나는지 확인한다.
     response = file_client.get(
-        "/admin/system-logs",
+        "/api/v1/admin/system-logs",
         params={"start": "2026-09-30T07:00:00", "end": "2026-09-30T06:00:00"},
     )
     assert response.status_code == 200
     body = response.json()
     assert body["items"] == []
     assert body["total"] == 0
+
+
+def test_validation_error_uses_common_error_shape():
+    # 422도 FastAPI 기본 형식(detail)이 아니라 공통 오류 형식으로 나가는지 확인한다.
+    # (프론트가 error.message로 사용자 문구를 꺼내는 계약)
+    res = client.get("/api/v1/admin/users", params={"page": 0})
+    assert res.status_code == 422
+    error = res.json()["error"]
+    assert error["code"] == "INVALID_INPUT"
+    assert isinstance(error["message"], str) and error["message"]
+    assert isinstance(error["request_id"], str) and error["request_id"]
+    assert "detail" not in res.json()
+
+
+def test_admin_paths_use_api_v1_prefix():
+    # 관리자 경로가 /api/v1 접두어 아래에 있고, 접두어 없는 구 경로는 404인지 확인한다.
+    assert client.get("/api/v1/admin/users").status_code == 200
+    assert client.get("/admin/users").status_code == 404
+
+
+def test_cors_allows_configured_origin():
+    # 허용된 프론트 오리진에는 CORS 응답 헤더가 붙는지 확인한다.
+    res = client.get("/api/v1/admin/users", headers={"Origin": "http://localhost:5173"})
+    assert res.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_cors_preflight_allows_authorization_header():
+    # 프리플라이트가 Authorization 헤더를 허용해 실연결 시 막히지 않는지 확인한다.
+    res = client.options(
+        "/api/v1/admin/users",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert res.status_code == 200
+    assert res.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    allowed = res.headers.get("access-control-allow-headers", "")
+    assert "authorization" in allowed.lower()
+
+
+def test_cors_blocks_unconfigured_origin():
+    # 허용 목록에 없는 오리진에는 allow-origin 헤더를 주지 않는지 확인한다.
+    res = client.get("/api/v1/admin/users", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in res.headers
+
+
+def test_unknown_path_uses_common_error_shape():
+    # 없는 경로(라우터 밖)의 404도 공통 오류 형식으로 나가는지 확인한다.
+    res = client.get("/api/v1/nope")
+    assert res.status_code == 404
+    assert res.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_cors_config_loads_comma_separated_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """문서에 정의된 쉼표 구분 CORS 환경변수를 정상적으로 읽는다.
+
+    Args:
+        monkeypatch: 테스트용 CORS 환경변수와 API 키를 설정할 도구.
+    """
+    from app.core.config import Settings
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setenv(
+        "CORS_ORIGINS", "http://localhost:5173, http://127.0.0.1:5173, "
+    )
+    settings = Settings(_env_file=None)
+    assert settings.cors_origins == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]

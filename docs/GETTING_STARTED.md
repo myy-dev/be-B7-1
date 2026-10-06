@@ -73,10 +73,12 @@ uv sync --locked
 OPENAI_API_KEY=발급받은_API_키
 OPENAI_MODEL=GPT 모델
 AI_TIMEOUT_SECONDS=30
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,https://www.quackquack-e.duckdns.org,https://b7-1-two.vercel.app
 ```
 
 - OpenAI 기능 사용 시 필요하며, 현재 서버 실행 확인에는 키가 없어도 됩니다.
 - 모델을 바꾸려면 `OPENAI_MODEL=사용할_모델_ID`를 추가합니다.
+- `CORS_ORIGINS`는 브라우저가 허용할 프론트엔드 주소입니다. 쉼표로 여러 개를 적습니다. 기본값은 개발 서버(`http://localhost:5173`, `http://127.0.0.1:5173`)와 실제 배포 주소(`https://www.quackquack-e.duckdns.org`, `https://b7-1-two.vercel.app`)입니다.
 - `.env`는 커밋하지 않습니다.
 
 ## 5. 서버 실행
