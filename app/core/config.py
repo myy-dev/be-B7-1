@@ -10,9 +10,13 @@ class Settings(BaseSettings):
     # 시스템 이벤트 로그(JSONL) 위치. 배포에서는 한 파일에 쌓이게 맞춘다.
     system_log_path: str = "logs/system.jsonl"
     # CORS_ORIGINS 환경변수는 쉼표로 구분한다: CORS_ORIGINS=http://a,http://b
+    # 기본값은 로컬 개발 주소와 실제 배포 주소를 함께 둔다. 배포 프론트는 자체
+    # 도메인과 Vercel 주소 두 곳으로 열린다.
     cors_origins: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://www.quackquack-e.duckdns.org",
+        "https://b7-1-two.vercel.app",
     ]
 
     @field_validator("cors_origins", mode="before")

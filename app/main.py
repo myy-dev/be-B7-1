@@ -24,7 +24,7 @@ app = FastAPI(title="B7-1 API", lifespan=lifespan)
 # 프론트(React)는 별도 오리진(기본 localhost:5173)이라 브라우저가 CORS를 적용한다.
 # 허용 오리진을 등록해 두지 않으면 브라우저가 실제 요청 전에 보내는 프리플라이트
 # (OPTIONS)를 막아 관리자 화면 호출이 전부 실패한다. 허용 오리진은 설정값
-# (Settings.cors_origins, 기본 로컬 개발 주소)으로 두어 배포에서 .env로 바꾼다.
+# (Settings.cors_origins, 기본 개발·배포 주소)으로 두어 배포에서 .env로 바꾼다.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
