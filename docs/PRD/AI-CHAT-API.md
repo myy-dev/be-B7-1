@@ -281,3 +281,17 @@
 | 502 | AI_UNAVAILABLE | AI 연결·응답 실패 |
 | 503 | AI_CONFIGURATION_ERROR | AI 관련 서버 설정 오류 |
 | 504 | AI_TIMEOUT | AI 호출 타임아웃 |
+
+
+### 일반 HTTP·서버 오류
+
+최신 main의 공통 오류 처리를 모든 API에 적용한다. 위 채팅 API 오류 코드와 함께 다음 코드를 사용한다.
+
+| HTTP 상태 | error.code | 설명 |
+| --- | --- | --- |
+| 404 | NOT_FOUND | 등록되지 않은 API 경로 |
+| 405 | METHOD_NOT_ALLOWED | 해당 경로가 지원하지 않는 HTTP 메서드 |
+| 기타 HTTP 오류 | HTTP_ERROR | 위 코드 또는 채팅 오류 코드로 처리하지 않는 일반 HTTP 오류 |
+| 500 | INTERNAL_ERROR | DB 오류로 분류하지 않는 예상하지 못한 서버 예외 |
+
+동일한 공통 오류 응답 구조를 사용하며, `request_id`는 응답의 `X-Request-ID`와 일치한다. 채팅방이 없거나 본인 소유가 아닌 경우에는 기존대로 `CHAT_NOT_FOUND`를 반환한다.

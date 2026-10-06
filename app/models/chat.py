@@ -2,7 +2,6 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
-    BigInteger,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -29,10 +28,8 @@ class Chat(Base):
     chat_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid4
     )
-    # TODO(회원 담당): 사용자 ID 계약에 맞춰 자료형과 사용자 외래키를 연결한다.
-    user_id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer(), "sqlite"), nullable=False
-    )
+    # TODO: 회원 담당 PR 병합 후 기존 User 모델의 users.id 외래키를 연결한다.
+    user_id: Mapped[int] = mapped_column(Integer(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTimeType(), nullable=False, default=func.now()
     )
