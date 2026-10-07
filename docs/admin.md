@@ -25,7 +25,7 @@ app/api/v1/admin_deps.py         의존성(인증 자리, 저장소 연결)
 app/services/admin_service.py    조회 로직
 app/schemas/admin.py             응답 형식
 app/repositories/admin_repositories.py  저장소 인터페이스
-app/repositories/admin_mock.py          임시 데이터
+app/repositories/admin_db.py             실제 DB 조회
 app/repositories/admin_system_log.py    시스템 로그 파일 조회
 tests/test_admin_api.py          테스트
 ```
@@ -36,13 +36,13 @@ tests/test_admin_api.py          테스트
 | --- | --- |
 | 관리자 라우터·서비스·응답 형식 | 구현 |
 | 시스템 로그 조회 | 구현 (이벤트·레벨·기간 필터, 최신순) |
-| 회원 조회 | 임시 데이터 (회원 스키마 대기) |
-| 대화 기록·세션 조회 | 임시 데이터 (채팅 스키마 대기, 응답 형식은 채팅 파트 스키마 반영) |
+| 회원 조회 | 구현 (`users` 실제 조회) |
+| 대화 기록·세션 조회 | 구현 (`chats`·`chat_logs` 실제 조회) |
 | 관리자 인증 | 통과 (회원 담당 JWT 대기) |
 | 오류 응답 | 구현 (`code`·`message`·`request_id`) |
 
-- 회원, 대화 기록, 세션은 저장소 스키마가 정해지지 않아 `admin_mock.py`로 돌아간다. 스키마가 나오면 이 파일만 실제 조회로 바꾸면 되고, 서비스와 라우터는 그대로 둔다.
-- 응답 형식은 채팅 파트가 정한 세션 식별자(`chat_id`=uuid)와 대화 기록 스키마에 맞췄다. 실제 저장 스키마가 확정되면 `admin_mock.py`의 목 데이터만 실 DB 값으로 바꾸면 된다.
+- 회원·대화 기록·세션은 `admin_db.py`에서 실제 DB(`users`·`chats`·`chat_logs`)를 읽는다. 세션 `title`은 DB에 컬럼이 없어 첫 질문으로 채운다.
+
 - 관리자 인증은 회원 담당이 JWT를 정하기 전까지 검사 없이 통과시킨다(`admin_deps.py`의 `require_admin`).
 - 시스템 로그는 백엔드 각자 JSONL 파일로 남기고, 조회는 여기서 맡는다. `event`, `level`, `start`, `end`로 걸러 최신순으로 준다. 형식은 조회를 맡은 어드민이 제시했고 [system-logs.md](system-logs.md)에 있다.
 - 저장소와 인증은 스키마·JWT가 나오면 바꿀 자리를 코드에 `TODO(담당)`로 표시해 두었다.
