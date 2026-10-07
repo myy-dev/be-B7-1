@@ -13,11 +13,48 @@ from app.schemas.chat import (
     ChatResponse,
     MessageResponse,
 )
+from app.schemas.error import ResponseErrorCode
 
 
 class ChatService:
     def __init__(self, repository: ChatRepository) -> None:
         self.repository = repository
+
+    async def _save_failed_message(
+        self,
+        message: ChatLog,
+        user_id: int,
+        chat_id: UUID,
+        error_code: ResponseErrorCode,
+        started_at: float,
+    ) -> None:
+        """AI 처리 실패를 같은 대화 기록에 저장한다.
+
+        Args:
+            message: 실패로 전환할 대화 기록.
+            user_id: 인증된 사용자 ID.
+            chat_id: 질문을 보낸 채팅방 ID.
+            error_code: 저장할 실패 코드.
+            started_at: AI 호출 시작 시각의 성능 측정값.
+        """
+        log_event(
+            "ai_call_failed",
+            user_id=str(user_id),
+            chat_id=chat_id,
+            result="failure",
+            error_code=error_code,
+            duration_ms=round((perf_counter() - started_at) * 1000, 3),
+        )
+        message.status = "failed"
+        message.error_code = error_code
+        message.finished_at = datetime.now(UTC)
+        await self.repository.save_message(message)
+        log_event(
+            "db_save_succeeded",
+            user_id=str(user_id),
+            chat_id=chat_id,
+            result="success",
+        )
 
     async def create_chat(self, user_id: int) -> ChatResponse:
         """사용자의 채팅방을 저장하고 생성 응답을 반환한다."""
@@ -71,6 +108,7 @@ class ChatService:
 
         Raises:
             APIError: 소유권 검사 또는 AI 호출에 실패한 경우.
+            Exception: 예상하지 못한 AI 예외가 발생하고 실패 기록 저장 후 다시 전달되는 경우.
             SQLAlchemyError: 질문이나 처리 결과 저장에 실패한 경우.
         """
         chat = await self.repository.get_by_id_and_user(chat_id, user_id)
@@ -99,23 +137,13 @@ class ChatService:
         try:
             answer = await ai_client.generate_answer(question, history)
         except APIError as exc:
-            log_event(
-                "ai_call_failed",
-                user_id=str(user_id),
-                chat_id=chat_id,
-                result="failure",
-                error_code=exc.code,
-                duration_ms=round((perf_counter() - started_at) * 1000, 3),
+            await self._save_failed_message(
+                message, user_id, chat_id, exc.api_code, started_at
             )
-            message.status = "failed"
-            message.error_code = exc.code
-            message.finished_at = datetime.now(UTC)
-            await self.repository.save_message(message)
-            log_event(
-                "db_save_succeeded",
-                user_id=str(user_id),
-                chat_id=chat_id,
-                result="success",
+            raise
+        except Exception:
+            await self._save_failed_message(
+                message, user_id, chat_id, "INTERNAL_ERROR", started_at
             )
             raise
         log_event(

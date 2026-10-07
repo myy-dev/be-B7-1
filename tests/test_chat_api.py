@@ -606,6 +606,28 @@ def test_ai_failure_preserves_failed_question(
     assert message["finished_at"] is not None
 
 
+def test_unexpected_ai_failure_preserves_failed_question(chat_api: _ChatAPI) -> None:
+    """APIError가 아닌 AI 예외도 질문을 실패 상태로 저장한다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    ai.generate_answer.side_effect = RuntimeError("hidden AI failure")
+    client = TestClient(chat_api.app, raise_server_exceptions=False)
+    try:
+        chat_id = client.post("/api/v1/chats").json()["chat_id"]
+        response = client.post(
+            f"/api/v1/chats/{chat_id}/messages", json={"question": "질문"}
+        )
+        _assert_error(response, 500, "INTERNAL_ERROR")
+        message = client.get(f"/api/v1/chats/{chat_id}").json()["messages"][0]
+    finally:
+        client.close()
+    assert message["request_id"] == response.headers["X-Request-ID"]
+    assert message["status"] == "failed"
+    assert message["error_code"] == "INTERNAL_ERROR"
+    assert message["answer"] is None
+    assert message["finished_at"] is not None
+
+
 def test_context_contains_only_last_five_completed_pairs(chat_api: _ChatAPI) -> None:
     """문맥은 해당 채팅방의 최근 성공 기록 5개만 시간순으로 포함한다."""
     chat_api.authenticate()

@@ -13,7 +13,7 @@ from pydantic import (
 )
 
 from app.core.datetimes import to_utc
-from app.schemas.error import ErrorCode
+from app.schemas.error import ResponseErrorCode
 
 UTCDateTime = Annotated[AwareDatetime, AfterValidator(to_utc)]
 MessageStatus = Literal["pending", "completed", "failed"]
@@ -75,7 +75,7 @@ class MessageResponse(BaseModel):
         description="메시지 처리 상태",
         examples=["completed"],
     )
-    error_code: ErrorCode | None = Field(
+    error_code: ResponseErrorCode | None = Field(
         description="처리 실패 시 오류 코드. 실패 상태가 아니면 null",
         examples=[None],
     )
