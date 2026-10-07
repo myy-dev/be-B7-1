@@ -14,6 +14,9 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from pydantic import AfterValidator
+from sqlalchemy import DateTime
+from sqlalchemy.engine import Dialect
+from sqlalchemy.types import TypeDecorator
 
 
 def to_utc(value: datetime) -> datetime:
@@ -25,3 +28,43 @@ def to_utc(value: datetime) -> datetime:
 
 # 쿼리·본문에서 받는 시각. 해석 즉시 UTC aware가 된다.
 UtcDateTime = Annotated[datetime, AfterValidator(to_utc)]
+
+
+class UTCDateTimeType(TypeDecorator[datetime]):
+    """DB에 UTC 시각을 저장하고 조회 결과에 UTC 시간대를 복원한다."""
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(
+        self, value: datetime | None, dialect: Dialect
+    ) -> datetime | None:
+        """저장 시각을 UTC로 맞추고 SQLite에는 시간대를 제외해 전달한다.
+
+        Args:
+            value: 저장할 시각 또는 null.
+            dialect: 값을 저장하는 DB 방언.
+
+        Returns:
+            UTC로 변환한 시각 또는 null.
+        """
+        if value is None:
+            return None
+        normalized = to_utc(value)
+        if dialect.name == "sqlite":
+            return normalized.replace(tzinfo=None)
+        return normalized
+
+    def process_result_value(
+        self, value: datetime | None, dialect: Dialect
+    ) -> datetime | None:
+        """DB에서 조회한 시각을 UTC 시간대가 있는 값으로 반환한다.
+
+        Args:
+            value: DB에서 조회한 시각 또는 null.
+            dialect: 값을 조회한 DB 방언.
+
+        Returns:
+            UTC 시간대를 가진 시각 또는 null.
+        """
+        return None if value is None else to_utc(value)

@@ -72,6 +72,7 @@ uv sync --locked
 ```dotenv
 OPENAI_API_KEY=발급받은_API_키
 OPENAI_MODEL=GPT 모델
+AI_TIMEOUT_SECONDS=30
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,https://www.quackquack-e.duckdns.org,https://b7-1-two.vercel.app
 ```
 
@@ -94,6 +95,13 @@ uv run fastapi dev
 | 서버 종료 | 터미널에서 `Ctrl+C` |
 
 SQLite는 별도 설치 없이 `app.db` 파일을 사용합니다.
+
+## AI 채팅 MVP
+
+- 채팅방 생성·목록·상세 조회와 `POST /api/v1/chats/{chat_id}/messages`를 제공합니다.
+- 질문 전송 본문은 `{"question": "질문 내용"}`이며, 성공하면 저장된 질문·답변을 `201` 일반 JSON으로 반환합니다. 최근 완료 대화 5개를 다음 질문의 문맥에 사용합니다.
+- `OPENAI_API_KEY`와 사용할 `OPENAI_MODEL`을 설정합니다. `AI_TIMEOUT_SECONDS`의 기본값은 30초이며 자동 재시도하지 않습니다.
+- 실제 사용자 인증은 아직 미연결이므로 채팅 API는 현재 `401`을 반환합니다. 대화 흐름은 테스트에서 인증·AI 의존성을 교체하여 검증합니다.
 
 ## 자주 쓰는 uv 명령어
 
