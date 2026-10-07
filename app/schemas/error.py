@@ -1,8 +1,6 @@
-"""API 공통 오류 응답 스키마를 정의한다."""
-
 from typing import Literal
 
-from pydantic import UUID4, BaseModel
+from pydantic import UUID4, BaseModel, Field
 
 ErrorCode = Literal[
     "UNAUTHORIZED",
@@ -15,13 +13,18 @@ ErrorCode = Literal[
     "AI_TIMEOUT",
 ]
 
+ResponseErrorCode = ErrorCode | Literal["INTERNAL_ERROR"]
+
 
 class ErrorDetail(BaseModel):
     """오류 코드, 안내 문구와 현재 요청의 식별자를 표현한다."""
 
-    code: ErrorCode
-    message: str
-    request_id: UUID4
+    code: ResponseErrorCode = Field(description="발생한 오류의 식별 코드")
+    message: str = Field(description="사용자에게 표시할 오류 안내 문구")
+    request_id: UUID4 = Field(
+        description="오류가 발생한 요청의 UUID4. 응답의 X-Request-ID와 일치",
+        examples=["16fd2706-8baf-433b-82eb-8c7fada847da"],
+    )
 
 
 class ErrorResponse(BaseModel):

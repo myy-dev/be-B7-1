@@ -71,6 +71,15 @@ class APIError(AppError):
         super().__init__(code, ERROR_MESSAGES[code], ERROR_STATUS_CODES[code])
 
 
+def internal_error() -> AppError:
+    """처리하지 못한 예외의 공통 오류 정보를 반환한다.
+
+    Returns:
+        원본 예외 정보를 포함하지 않는 서버 내부 오류.
+    """
+    return AppError("INTERNAL_ERROR", "서버 내부 오류가 발생했습니다.", status_code=500)
+
+
 def error_body(request: Request, code: str, message: str) -> dict[str, dict[str, str]]:
     """오류 코드를 요청 로그에 연결하고 공통 응답 본문을 생성한다.
 
@@ -158,9 +167,10 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
     Returns:
         요청 식별자 헤더와 INTERNAL_ERROR 본문을 포함한 500 응답.
     """
+    error = internal_error()
     return JSONResponse(
-        status_code=500,
-        content=error_body(request, "INTERNAL_ERROR", "서버 내부 오류가 발생했습니다."),
+        status_code=error.status_code,
+        content=error_body(request, error.code, error.message),
         headers={"X-Request-ID": str(request.state.request_id)},
     )
 
