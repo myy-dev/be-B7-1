@@ -15,6 +15,7 @@ from sqlalchemy.pool import ConnectionPoolEntry
 
 from app.core.database import Base
 from app.models import Chat, ChatLog
+from app.models.user import User
 
 
 def _create_engine(path: Path) -> Engine:
@@ -41,6 +42,19 @@ def model_engine(tmp_path: Path) -> Iterator[Engine]:
     """
     engine = _create_engine(tmp_path / "chat-models.db")
     Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add_all(
+            [
+                User(id=1, username="test_user", password_hash="test-only", name="회원"),
+                User(
+                    id=9_000_000_001,
+                    username="large_owner",
+                    password_hash="test-only",
+                    name="큰 ID 회원",
+                ),
+            ]
+        )
+        session.commit()
     try:
         yield engine
     finally:
@@ -309,3 +323,52 @@ def test_required_question_and_model_are_not_null(
         )
         with pytest.raises(IntegrityError, match="NOT NULL"):
             session.commit()
+
+
+def test_nonexistent_user_foreign_key_is_rejected(model_engine: Engine) -> None:
+    """없는 사용자 ID로 채팅을 저장하면 외래키 검사로 거절한다.
+
+    Args:
+        model_engine: 외래키 검사가 켜진 테스트용 SQLite 엔진.
+    """
+    with Session(model_engine) as session:
+        session.add(Chat(user_id=9999))
+        with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+            session.commit()
+        session.rollback()
+        assert session.scalars(select(Chat)).all() == []
+
+
+def test_owner_update_requires_existing_user(model_engine: Engine) -> None:
+    """채팅 소유자를 없는 사용자로 바꾸면 거절하고 기존 소유자를 유지한다.
+
+    Args:
+        model_engine: 외래키 검사가 켜진 테스트용 SQLite 엔진.
+    """
+    chat_id = _create_chat(model_engine)
+    with Session(model_engine) as session:
+        chat = session.get(Chat, chat_id)
+        assert chat is not None
+        chat.user_id = 9999
+        with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+            session.commit()
+        session.rollback()
+        assert chat.user_id == 9_000_000_001
+
+
+def test_referenced_user_delete_preserves_chat(model_engine: Engine) -> None:
+    """삭제 정책 확정 전 외래키 기본 동작이 고아 채팅 생성을 막는다.
+
+    Args:
+        model_engine: 외래키 검사가 켜진 테스트용 SQLite 엔진.
+    """
+    chat_id = _create_chat(model_engine)
+    with Session(model_engine) as session:
+        user = session.get(User, 9_000_000_001)
+        assert user is not None
+        session.delete(user)
+        with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+            session.commit()
+        session.rollback()
+        assert session.get(User, 9_000_000_001) is not None
+        assert session.get(Chat, chat_id) is not None

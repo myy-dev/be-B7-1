@@ -15,9 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.api.dependencies import get_current_user_id
 from app.core.config import Settings
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
+from app.core.errors import APIError
 from app.core.logging import EventLogFormatter
 from app.main import app
 from app.models.chat import Chat, ChatLog
+from app.models.user import User
 from app.schemas.chat import MessageResponse
 from app.schemas.error import ErrorCode
 
@@ -168,6 +170,16 @@ def test_app_sdk_and_database_integration(
         try:
             async with engine.begin() as connection:
                 await connection.run_sync(Base.metadata.create_all)
+            async with sessions() as session:
+                session.add(
+                    User(
+                        id=2**40 + 7,
+                        username="sdk_owner",
+                        password_hash="test-only",
+                        name="통합 회원",
+                    )
+                )
+                await session.commit()
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
@@ -244,7 +256,13 @@ def test_app_sdk_and_database_integration(
                     )
                     assert other_owner.status_code == 404
                     assert other_owner.json()["error"]["code"] == "CHAT_NOT_FOUND"
-                    monkeypatch.delitem(app.dependency_overrides, get_current_user_id)
+                    def reject_auth() -> int:
+                        """인증 실패를 재현한다."""
+                        raise APIError("UNAUTHORIZED")
+
+                    monkeypatch.setitem(
+                        app.dependency_overrides, get_current_user_id, reject_auth
+                    )
                     unauthorized = await client.post(
                         path + "/messages", json={"question": "미인증 질문"}
                     )
@@ -261,6 +279,8 @@ def test_app_sdk_and_database_integration(
                 chats = list((await session.scalars(select(Chat))).all())
                 messages = list((await session.scalars(select(ChatLog))).all())
                 assert len(chats) == 1 and chats[0].user_id == 2**40 + 7
+                owner = await session.get(User, chats[0].user_id)
+                assert owner is not None and owner.username == "sdk_owner"
                 assert len(messages) == len(expected_messages)
                 by_id = {str(message.request_id): message for message in messages}
                 for expected in expected_messages:

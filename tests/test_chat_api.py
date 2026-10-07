@@ -30,6 +30,7 @@ from app.clients.ai import AIClient
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
 from app.core.errors import APIError, configure_request_processing
 from app.models.chat import Chat, ChatLog
+from app.models.user import User
 from app.repositories.chat_repository import ChatRepository
 from app.schemas.error import ErrorCode
 
@@ -82,6 +83,30 @@ def chat_api() -> Iterator[_ChatAPI]:
     async def create_tables() -> None:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+        async with sessions() as session:
+            session.add_all(
+                [
+                    User(
+                        id=1,
+                        username="mock_owner",
+                        password_hash="test-only",
+                        name="모의 로그인 회원",
+                    ),
+                    User(
+                        id=2**40 + 7,
+                        username="chat_owner",
+                        password_hash="test-only",
+                        name="채팅 회원",
+                    ),
+                    User(
+                        id=2**40 + 8,
+                        username="other_owner",
+                        password_hash="test-only",
+                        name="다른 회원",
+                    ),
+                ]
+            )
+            await session.commit()
 
     asyncio.run(create_tables())
     app = FastAPI()
@@ -113,17 +138,17 @@ def _assert_error(response: Response, status_code: int, code: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("method", "path"),
+    ("method", "path", "status_code"),
     [
-        ("POST", "/api/v1/chats"),
-        ("GET", "/api/v1/chats"),
-        ("GET", "/api/v1/chats/00000000-0000-4000-8000-000000000001"),
+        ("POST", "/api/v1/chats", 201),
+        ("GET", "/api/v1/chats", 200),
+        ("GET", "/api/v1/chats/00000000-0000-4000-8000-000000000001", 404),
     ],
 )
-def test_unconnected_auth_rejects_spoofed_identity(
-    chat_api: _ChatAPI, method: str, path: str
+def test_mock_login_uses_fixed_owner_despite_spoofed_identity(
+    chat_api: _ChatAPI, method: str, path: str, status_code: int
 ) -> None:
-    """임의의 인증 정보나 사용자 ID를 보내도 인증 연결 전에는 거절한다."""
+    """임시 로그인은 요청의 임의 사용자 ID 대신 고정 사용자 1을 사용한다."""
     response = chat_api.client.request(
         method,
         path,
@@ -135,8 +160,13 @@ def test_unconnected_auth_rejects_spoofed_identity(
         params={"user_id": chat_api.user_id},
         json={"user_id": chat_api.user_id},
     )
-    _assert_error(response, 401, "UNAUTHORIZED")
-    assert chat_api.stored_chats() == []
+    assert response.status_code == status_code
+    if method == "POST":
+        assert chat_api.stored_chats()[0].user_id == 1
+    elif status_code == 200:
+        assert response.json() == {"items": []}
+    else:
+        _assert_error(response, 404, "CHAT_NOT_FOUND")
 
 
 def test_create_persists_authenticated_owner(chat_api: _ChatAPI) -> None:
@@ -411,6 +441,14 @@ async def verify_startup():
             )
             assert set(tables) == {"users", "chats", "chat_logs"}
             assert await connection.scalar(text("PRAGMA foreign_keys")) == 1
+            keys = await connection.run_sync(
+                lambda sync_connection: inspect(sync_connection).get_foreign_keys(
+                    "chats"
+                )
+            )
+            assert keys[0]["constrained_columns"] == ["user_id"]
+            assert keys[0]["referred_table"] == "users"
+            assert keys[0]["referred_columns"] == ["id"]
 
 asyncio.run(verify_startup())
 """
@@ -529,7 +567,13 @@ def test_unowned_question_does_not_save_or_call_ai(
 
 
 def test_question_requires_auth_before_ai_settings(chat_api: _ChatAPI) -> None:
-    """질문 전송도 실제 인증 연결 전에는 AI 설정 조회 없이 거절한다."""
+    """인증 의존성이 거절하면 AI 설정 조회 없이 질문 전송을 거절한다."""
+
+    def reject_auth() -> int:
+        """인증 실패를 재현한다."""
+        raise APIError("UNAUTHORIZED")
+
+    chat_api.app.dependency_overrides[get_current_user_id] = reject_auth
     response = chat_api.client.post(
         "/api/v1/chats/00000000-0000-4000-8000-000000000001/messages",
         json={"question": "질문"},
@@ -662,3 +706,52 @@ def test_question_or_answer_save_failure_never_returns_success(
         assert len(saved) == 1
         assert saved[0].status == "pending"
         assert saved[0].answer is None
+
+
+def test_nonexistent_owner_returns_db_error(chat_api: _ChatAPI) -> None:
+    """없는 사용자 ID의 채팅 저장은 실패하고 DB 오류 응답을 반환한다.
+
+    Args:
+        chat_api: 기존 User 모델과 외래키를 사용하는 테스트 API 환경.
+    """
+    chat_api.app.dependency_overrides[get_current_user_id] = lambda: 9999
+    response = chat_api.client.post("/api/v1/chats")
+    _assert_error(response, 500, "DB_ERROR")
+    assert chat_api.stored_chats() == []
+
+
+def test_signup_user_can_create_chat_and_save_message(chat_api: _ChatAPI) -> None:
+    """회원가입으로 생성한 사용자에 채팅·메시지가 연결되는지 검증한다.
+
+    Args:
+        chat_api: 회원가입·채팅 라우터와 격리한 DB를 사용하는 테스트 환경.
+    """
+    signup = chat_api.client.post(
+        "/api/v1/auth/signup",
+        json={
+            "username": "signup_owner",
+            "password": "test-password",
+            "name": "새 회원",
+        },
+    )
+    assert signup.status_code == 201
+    chat_api.user_id = signup.json()["id"]
+    chat_api.authenticate()
+    _mock_ai(chat_api)
+    created = chat_api.client.post("/api/v1/chats")
+    assert created.status_code == 201
+    chat_id = created.json()["chat_id"]
+    message = chat_api.client.post(
+        f"/api/v1/chats/{chat_id}/messages", json={"question": "첫 질문"}
+    )
+    assert message.status_code == 201
+    assert message.json()["status"] == "completed"
+    assert chat_api.stored_chats()[0].user_id == signup.json()["id"]
+
+    async def check_user() -> None:
+        async with chat_api.sessions() as session:
+            user = await session.get(User, signup.json()["id"])
+            assert user is not None
+            assert user.username == "signup_owner"
+
+    asyncio.run(check_user())
