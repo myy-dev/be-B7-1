@@ -30,7 +30,7 @@ from app.clients.ai import AIClient
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
 from app.core.errors import APIError, configure_request_processing
 from app.models.chat import Chat, ChatLog
-from app.repositories.chat import ChatRepository
+from app.repositories.chat_repository import ChatRepository
 from app.schemas.error import ErrorCode
 
 
@@ -460,9 +460,13 @@ def test_question_answer_is_committed_and_reused_as_context(
     async def answer(question: str, history: list[tuple[str, str]]) -> str:
         assert not sessions[-1].in_transaction()
         async with chat_api.sessions() as session:
-            pending = list((await session.scalars(
-                select(ChatLog).where(ChatLog.status == "pending")
-            )).all())
+            pending = list(
+                (
+                    await session.scalars(
+                        select(ChatLog).where(ChatLog.status == "pending")
+                    )
+                ).all()
+            )
             assert len(pending) == 1
             assert pending[0].question == question
             assert pending[0].answer is pending[0].finished_at is None
@@ -568,31 +572,48 @@ def test_context_contains_only_last_five_completed_pairs(chat_api: _ChatAPI) -> 
     rows = [
         ChatLog(
             request_id=UUID(f"00000000-0000-4000-8000-{number:012x}"),
-            chat_id=chat_id, question=f"질문{number}", answer=f"답변{number}",
-            status="completed", model="test-model",
-            created_at=moment + timedelta(seconds=number), finished_at=moment,
+            chat_id=chat_id,
+            question=f"질문{number}",
+            answer=f"답변{number}",
+            status="completed",
+            model="test-model",
+            created_at=moment + timedelta(seconds=number),
+            finished_at=moment,
         )
         for number in range(1, 8)
     ]
-    rows.extend([
-        ChatLog(
-            request_id=UUID("00000000-0000-4000-8000-000000000008"),
-            chat_id=chat_id, question="실패 질문", status="failed", model="test-model",
-            error_code="AI_TIMEOUT", created_at=moment + timedelta(seconds=8),
-            finished_at=moment,
-        ),
-        ChatLog(
-            request_id=UUID("00000000-0000-4000-8000-000000000009"),
-            chat_id=chat_id, question="진행 중", status="pending", model="test-model",
-            created_at=moment + timedelta(seconds=9),
-        ),
-        ChatLog(
-            request_id=UUID("00000000-0000-4000-8000-00000000000a"),
-            chat_id=other, question="다른 방", answer="다른 답변",
-            status="completed", model="test-model", created_at=moment,
-            finished_at=moment,
-        ),
-    ])
+    rows.extend(
+        [
+            ChatLog(
+                request_id=UUID("00000000-0000-4000-8000-000000000008"),
+                chat_id=chat_id,
+                question="실패 질문",
+                status="failed",
+                model="test-model",
+                error_code="AI_TIMEOUT",
+                created_at=moment + timedelta(seconds=8),
+                finished_at=moment,
+            ),
+            ChatLog(
+                request_id=UUID("00000000-0000-4000-8000-000000000009"),
+                chat_id=chat_id,
+                question="진행 중",
+                status="pending",
+                model="test-model",
+                created_at=moment + timedelta(seconds=9),
+            ),
+            ChatLog(
+                request_id=UUID("00000000-0000-4000-8000-00000000000a"),
+                chat_id=other,
+                question="다른 방",
+                answer="다른 답변",
+                status="completed",
+                model="test-model",
+                created_at=moment,
+                finished_at=moment,
+            ),
+        ]
+    )
     chat_api.seed(*rows)
     response = chat_api.client.post(
         f"/api/v1/chats/{chat_id}/messages", json={"question": "현재 질문"}
@@ -607,8 +628,10 @@ def test_context_contains_only_last_five_completed_pairs(chat_api: _ChatAPI) -> 
     ("failure_at", "ai_failure"), [(1, False), (2, False), (2, True)]
 )
 def test_question_or_answer_save_failure_never_returns_success(
-    chat_api: _ChatAPI, monkeypatch: pytest.MonkeyPatch,
-    failure_at: int, ai_failure: bool,
+    chat_api: _ChatAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_at: int,
+    ai_failure: bool,
 ) -> None:
     """질문 저장 실패는 AI 호출을 막고 답변 저장 실패는 성공을 반환하지 않는다."""
     chat_api.authenticate()
