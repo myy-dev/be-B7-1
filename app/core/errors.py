@@ -61,14 +61,13 @@ class AppError(Exception):
 class APIError(AppError):
     """AI·채팅 명세에 정의된 오류를 기존 공통 오류 체계로 전달한다."""
 
-    code: ErrorCode
-
     def __init__(self, code: ErrorCode) -> None:
         """오류 코드에 맞는 상태와 고정 안내 문구를 설정한다.
 
         Args:
             code: AI·채팅 명세에 정의된 오류 코드.
         """
+        self.api_code: ErrorCode = code
         super().__init__(code, ERROR_MESSAGES[code], ERROR_STATUS_CODES[code])
 
 
@@ -93,7 +92,7 @@ def error_body(request: Request, code: str, message: str) -> dict[str, dict[str,
     }
 
 
-async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """서비스 오류를 지정된 상태와 공통 응답으로 변환한다.
 
     Args:
@@ -103,6 +102,8 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     Returns:
         서비스 오류의 상태와 안내 문구를 포함한 응답.
     """
+    if not isinstance(exc, AppError):
+        raise exc
     return JSONResponse(
         status_code=exc.status_code,
         content=error_body(request, exc.code, exc.message),
@@ -189,7 +190,7 @@ def _error_response(
     )
 
 
-async def handle_api_error(request: Request, exc: APIError) -> JSONResponse:
+async def handle_api_error(request: Request, exc: Exception) -> JSONResponse:
     """Service 등에서 발생한 예상 가능한 처리 실패를 공통 응답으로 변환한다.
 
     Args:
@@ -199,12 +200,12 @@ async def handle_api_error(request: Request, exc: APIError) -> JSONResponse:
     Returns:
         오류 코드와 요청 식별자를 포함한 응답.
     """
-    return _error_response(request, exc.code, exception_type=type(exc).__name__)
+    if not isinstance(exc, APIError):
+        raise exc
+    return _error_response(request, exc.api_code, exception_type=type(exc).__name__)
 
 
-async def handle_validation_error(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
     """검증 오류에서 입력 원문을 제외하고 공통 422 응답을 반환한다.
 
     Args:
@@ -214,10 +215,12 @@ async def handle_validation_error(
     Returns:
         INVALID_INPUT 오류 응답.
     """
+    if not isinstance(exc, RequestValidationError):
+        raise exc
     return _error_response(request, "INVALID_INPUT", exception_type=type(exc).__name__)
 
 
-async def handle_database_error(request: Request, exc: SQLAlchemyError) -> JSONResponse:
+async def handle_database_error(request: Request, exc: Exception) -> JSONResponse:
     """SQL이나 매개변수 원문을 제외하고 공통 DB 오류 응답을 반환한다.
 
     Args:
@@ -227,10 +230,12 @@ async def handle_database_error(request: Request, exc: SQLAlchemyError) -> JSONR
     Returns:
         DB_ERROR 오류 응답.
     """
+    if not isinstance(exc, SQLAlchemyError):
+        raise exc
     return _error_response(request, "DB_ERROR", exception_type=type(exc).__name__)
 
 
-async def handle_http_error(request: Request, exc: HTTPException) -> Response:
+async def handle_http_error(request: Request, exc: Exception) -> Response:
     """인증·입력 오류를 명세에 맞추고 다른 HTTP 오류도 공통 형식으로 반환한다.
 
     Args:
@@ -240,6 +245,8 @@ async def handle_http_error(request: Request, exc: HTTPException) -> Response:
     Returns:
         HTTP 상태와 요청 식별자를 포함한 공통 오류 응답.
     """
+    if not isinstance(exc, HTTPException):
+        raise exc
     code: ErrorCode
     if exc.status_code == 401:
         code = "UNAUTHORIZED"
