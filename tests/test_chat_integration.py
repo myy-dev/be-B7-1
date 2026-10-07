@@ -17,7 +17,7 @@ from app.core.config import Settings
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
 from app.core.errors import APIError
 from app.core.logging import EventLogFormatter
-from app.main import app
+from app.main import app, lifespan
 from app.models.chat import Chat, ChatLog
 from app.models.user import User
 from app.schemas.chat import MessageResponse
@@ -97,7 +97,7 @@ def test_app_sdk_and_database_integration(
         openai_model="test-model",
         ai_timeout_seconds=timeout,
     )
-    monkeypatch.setattr("app.api.dependencies.get_settings", lambda: settings)
+    monkeypatch.setattr("app.main.settings", settings)
     monkeypatch.setitem(
         app.dependency_overrides, get_current_user_id, lambda: 2**40 + 7
     )
@@ -115,6 +115,13 @@ def test_app_sdk_and_database_integration(
         engine = create_async_engine(database_url)
         event.listen(engine.sync_engine, "connect", _enable_sqlite_foreign_keys)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+        async def create_tables() -> None:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+
+        monkeypatch.setattr("app.main.create_db_and_tables", create_tables)
+        monkeypatch.setattr("app.main.engine", engine)
 
         async def test_db() -> AsyncGenerator[AsyncSession, None]:
             async with sessions() as session:
@@ -174,9 +181,7 @@ def test_app_sdk_and_database_integration(
             )
 
         monkeypatch.setattr("app.clients.ai.AsyncOpenAI", sdk_factory)
-        try:
-            async with engine.begin() as connection:
-                await connection.run_sync(Base.metadata.create_all)
+        async with lifespan(app):
             async with sessions() as session:
                 session.add(
                     User(
@@ -198,7 +203,8 @@ def test_app_sdk_and_database_integration(
                 )
                 assert first.status_code == expected_status
                 assert len(sdk_requests) == 1
-                assert sdk_connections[-1].is_closed
+                assert len(sdk_connections) == 1
+                assert not sdk_connections[0].is_closed
                 if expected_code is None:
                     first_message = _message(first)
                     assert first_message["question"] == "첫 통합 질문"
@@ -276,8 +282,8 @@ def test_app_sdk_and_database_integration(
                     assert unauthorized.status_code == 401
                     assert unauthorized.json()["error"]["code"] == "UNAUTHORIZED"
                     assert len(sdk_requests) == 2
-        finally:
-            await engine.dispose()
+        assert len(sdk_connections) == 1
+        assert sdk_connections[0].is_closed
 
         reopened = create_async_engine(database_url)
         try:

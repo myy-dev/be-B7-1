@@ -237,6 +237,8 @@ Status Codes:
 - SQLAlchemy 비동기 세션과 SQLite를 사용한다.
 - 서버의 OpenAI SDK를 사용해 AI API를 호출한다.
 - `OPENAI_API_KEY`, `OPENAI_MODEL`은 환경변수로 관리하고, `AI_TIMEOUT_SECONDS`를 추가해 기본 30초의 타임아웃을 설정한다.
+- AI 키·모델이 빈 문자열이거나 공백뿐이면 설정 검증에 실패하여 서버 시작을 중단한다. 실제 AI 호출에서 확인되는 키·모델·권한 오류는 기존 `503 AI_CONFIGURATION_ERROR`로 처리한다.
+- AI 클라이언트는 앱 시작 시 한 번 생성하여 요청 간 재사용하고 앱 종료 시 HTTP 자원을 정리한다. 클라이언트 생성·종료에 실패해도 DB 엔진을 정리한다.
 - `.env`는 Git에서 제외하고 `.env.example`과 실행 문서에 설정 방법을 제공한다.
 - DB 트랜잭션은 AI 응답을 기다리는 동안 열어두지 않는다. 질문 저장과 완료·실패 갱신을 각각 처리한다.
 - AI 호출을 자동 재시도하지 않는다.
