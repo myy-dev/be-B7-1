@@ -126,7 +126,7 @@ def sample_log_file(tmp_path):
         '{"timestamp":"2026-09-30T06:00:00Z","level":"ERROR",'
         '"event":"ai_call_failed","user_id":7}\n'
         '{"timestamp":"2026-09-30T07:00:00Z","level":"INFO",'
-        '"event":"db_save_success","user_id":8}\n'
+        '"event":"db_save_succeeded","user_id":8}\n'
         "not-json-line\n",
         encoding="utf-8",
     )
@@ -164,7 +164,7 @@ def test_system_logs_sorted_newest_first(file_client):
     # 정렬은 항상 최신순이어야 한다(파일은 시간 오름차순으로 썼음).
     body = file_client.get("/api/v1/admin/system-logs").json()
     events = [item["event"] for item in body["items"]]
-    assert events == ["db_save_success", "ai_call_failed", "ai_call_started"]
+    assert events == ["db_save_succeeded", "ai_call_failed", "ai_call_started"]
 
 
 @pytest.mark.parametrize(
@@ -207,7 +207,7 @@ def test_system_logs_skip_invalid_records(file_client, sample_log_file, invalid_
     assert body["total"] == 4
     assert [item["event"] for item in body["items"]] == [
         "request_received",
-        "db_save_success",
+        "db_save_succeeded",
         "ai_call_failed",
         "ai_call_started",
     ]
@@ -217,7 +217,7 @@ def test_system_logs_skip_invalid_records(file_client, sample_log_file, invalid_
     )
     assert filtered.status_code == 200
     assert filtered.json()["total"] == 2
-    assert filtered.json()["items"][0]["event"] == "db_save_success"
+    assert filtered.json()["items"][0]["event"] == "db_save_succeeded"
 
 
 def test_system_logs_only_invalid_records_return_empty_page(

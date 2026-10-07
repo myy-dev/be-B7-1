@@ -1,6 +1,7 @@
 """OpenAI에서 완성된 일반 텍스트 답변을 가져온다."""
 
 import asyncio
+import json
 
 from openai import (
     APIConnectionError,
@@ -66,9 +67,20 @@ class AIClient:
             raise APIError("AI_CONFIGURATION_ERROR") from exc
         except (APIConnectionError, APIStatusError) as exc:
             raise APIError("AI_UNAVAILABLE") from exc
-        if response.status != "completed" or not response.output_text.strip():
+        except json.JSONDecodeError as exc:
+            raise APIError("AI_UNAVAILABLE") from exc
+        try:
+            response_status = response.status
+            answer = response.output_text
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise APIError("AI_UNAVAILABLE") from exc
+        if (
+            response_status != "completed"
+            or not isinstance(answer, str)
+            or not answer.strip()
+        ):
             raise APIError("AI_UNAVAILABLE")
-        return response.output_text
+        return answer
 
     async def close(self) -> None:
         """요청이 끝나면 SDK의 비동기 HTTP 연결을 정리한다."""

@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
@@ -13,11 +14,11 @@ LogEvent = Literal[
     "request_completed",
     "request_failed",
     "api_error",
-    "ai_started",
-    "ai_completed",
-    "ai_failed",
-    "db_saved",
-    "db_failed",
+    "ai_call_started",
+    "ai_call_succeeded",
+    "ai_call_failed",
+    "db_save_succeeded",
+    "db_save_failed",
 ]
 
 
@@ -52,13 +53,38 @@ class EventLogFormatter(logging.Formatter):
         return json.dumps(fields, ensure_ascii=False)
 
 
-def configure_logging() -> None:
-    """애플리케이션 이벤트 로그를 INFO 수준의 JSON 출력으로 설정한다."""
+def configure_logging(log_path: str | None = None) -> None:
+    """애플리케이션 이벤트 로그를 JSON 출력과 파일에 연결한다.
+
+    Args:
+        log_path: 관리자 조회용 JSONL 파일 경로. None이면 표준 출력만 사용한다.
+    """
     logger = logging.getLogger("app.events")
-    if not logger.handlers:
+    if not any(
+        isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+        for handler in logger.handlers
+    ):
         handler = logging.StreamHandler()
         handler.setFormatter(EventLogFormatter())
         logger.addHandler(handler)
+    if log_path is not None:
+        path = Path(log_path)
+        resolved_path = str(path.absolute())
+        has_file_handler = any(
+            getattr(handler, "_app_log_path", None) == resolved_path
+            for handler in logger.handlers
+        )
+        if not has_file_handler:
+            for handler in list(logger.handlers):
+                if getattr(handler, "_app_log_path", None) is not None:
+                    logger.removeHandler(handler)
+                    handler.close()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(path, encoding="utf-8")
+            setattr(file_handler, "_app_log_path", resolved_path)
+            file_handler.setFormatter(EventLogFormatter())
+            logger.addHandler(file_handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False
 

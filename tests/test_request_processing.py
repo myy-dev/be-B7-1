@@ -17,8 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.api.dependencies import RequestId
 from app.core.database import get_db
-from app.core.errors import ERROR_STATUS_CODES, APIError, configure_request_processing
-from app.core.logging import EventLogFormatter, log_event
+from app.core.errors import (
+    ERROR_STATUS_CODES,
+    APIError,
+    configure_request_processing,
+)
+from app.core.logging import EventLogFormatter, configure_logging, log_event
 from app.core.request_context import request_id_context
 from app.schemas.error import ErrorCode
 
@@ -34,7 +38,7 @@ def _test_app() -> FastAPI:
     @app.get("/identity")
     async def identity(request_id: RequestId) -> dict[str, str]:
         await asyncio.sleep(0)
-        log_event("ai_started")
+        log_event("ai_call_started")
         return {
             "request_id": str(request_id),
             "context_id": str(request_id_context.get()),
@@ -103,6 +107,35 @@ def event_logs(
     monkeypatch.setattr(logger, "propagate", False)
     caplog.set_level(logging.INFO, logger="app.events")
     return caplog
+
+
+def test_events_are_written_to_configured_jsonl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """설정한 시스템 로그 파일에 이벤트를 JSONL로 기록한다."""
+    logger = logging.getLogger("app.events")
+    monkeypatch.setattr(logger, "handlers", [])
+    log_path = tmp_path / "logs" / "system.jsonl"
+    request_id = UUID("16fd2706-8baf-433b-82eb-8c7fada847da")
+
+    configure_logging(str(log_path))
+    log_event(
+        "ai_call_failed",
+        request_id=request_id,
+        user_id="7",
+        error_code="AI_UNAVAILABLE",
+        result="failure",
+    )
+    for handler in logger.handlers:
+        handler.flush()
+
+    record = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert record["event"] == "ai_call_failed"
+    assert record["request_id"] == str(request_id)
+    assert record["user_id"] == "7"
+    assert record["error_code"] == "AI_UNAVAILABLE"
+    for handler in logger.handlers:
+        handler.close()
 
 
 def test_server_generates_unique_request_ids(
@@ -189,7 +222,7 @@ def test_database_error_redacts_sql_and_parameters(
     rendered = "\n".join(formatter.format(record) for record in event_logs.records)
     assert "private" not in response.text + rendered
     failed = [json.loads(line) for line in rendered.splitlines()]
-    assert any(item["event"] == "db_failed" for item in failed)
+    assert any(item["event"] == "db_save_failed" for item in failed)
 
 
 def test_unexpected_error_is_logged_and_reraised(

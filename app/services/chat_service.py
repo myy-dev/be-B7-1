@@ -23,7 +23,7 @@ class ChatService:
         """사용자의 채팅방을 저장하고 생성 응답을 반환한다."""
         chat = await self.repository.create(user_id)
         log_event(
-            "db_saved",
+            "db_save_succeeded",
             user_id=str(user_id),
             chat_id=chat.chat_id,
             result="success",
@@ -88,14 +88,19 @@ class ChatService:
             status="pending",
         )
         await self.repository.save_message(message)
-        log_event("db_saved", user_id=str(user_id), chat_id=chat_id, result="success")
+        log_event(
+            "db_save_succeeded",
+            user_id=str(user_id),
+            chat_id=chat_id,
+            result="success",
+        )
         started_at = perf_counter()
-        log_event("ai_started", user_id=str(user_id), chat_id=chat_id)
+        log_event("ai_call_started", user_id=str(user_id), chat_id=chat_id)
         try:
             answer = await ai_client.generate_answer(question, history)
         except APIError as exc:
             log_event(
-                "ai_failed",
+                "ai_call_failed",
                 user_id=str(user_id),
                 chat_id=chat_id,
                 result="failure",
@@ -107,11 +112,14 @@ class ChatService:
             message.finished_at = datetime.now(UTC)
             await self.repository.save_message(message)
             log_event(
-                "db_saved", user_id=str(user_id), chat_id=chat_id, result="success"
+                "db_save_succeeded",
+                user_id=str(user_id),
+                chat_id=chat_id,
+                result="success",
             )
             raise
         log_event(
-            "ai_completed",
+            "ai_call_succeeded",
             user_id=str(user_id),
             chat_id=chat_id,
             result="success",
@@ -121,5 +129,10 @@ class ChatService:
         message.status = "completed"
         message.finished_at = datetime.now(UTC)
         await self.repository.save_message(message)
-        log_event("db_saved", user_id=str(user_id), chat_id=chat_id, result="success")
+        log_event(
+            "db_save_succeeded",
+            user_id=str(user_id),
+            chat_id=chat_id,
+            result="success",
+        )
         return MessageResponse.model_validate(message)

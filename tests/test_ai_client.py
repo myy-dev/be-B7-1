@@ -37,6 +37,7 @@ def _response(
         ("timeout", "AI_TIMEOUT"),
         ("deadline", "AI_TIMEOUT"),
         ("connection", "AI_UNAVAILABLE"),
+        ("malformed", "AI_UNAVAILABLE"),
         ("401", "AI_CONFIGURATION_ERROR"),
         ("403", "AI_CONFIGURATION_ERROR"),
         ("404", "AI_CONFIGURATION_ERROR"),
@@ -58,6 +59,12 @@ def test_sdk_request_response_and_error_mapping(
             await asyncio.sleep(0.05)
         if scenario == "connection":
             raise httpx2.ConnectError("hidden connection", request=request)
+        if scenario == "malformed":
+            return httpx2.Response(
+                200,
+                content=b"{",
+                headers={"content-type": "application/json"},
+            )
         if scenario.isdigit():
             return httpx2.Response(
                 int(scenario), json={"error": {"message": "hidden API error"}}

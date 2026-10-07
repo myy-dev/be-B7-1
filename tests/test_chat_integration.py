@@ -64,6 +64,7 @@ def _message(response: Response) -> dict[str, object]:
         ("timeout", 504, "AI_TIMEOUT"),
         ("deadline", 504, "AI_TIMEOUT"),
         ("connection", 502, "AI_UNAVAILABLE"),
+        ("malformed", 502, "AI_UNAVAILABLE"),
         ("401", 503, "AI_CONFIGURATION_ERROR"),
         ("403", 503, "AI_CONFIGURATION_ERROR"),
         ("404", 503, "AI_CONFIGURATION_ERROR"),
@@ -139,6 +140,12 @@ def test_app_sdk_and_database_integration(
                 await asyncio.sleep(0.05)
             if scenario == "connection":
                 raise httpx2.ConnectError("hidden SDK connection", request=request)
+            if scenario == "malformed":
+                return httpx2.Response(
+                    200,
+                    content=b"{",
+                    headers={"content-type": "application/json"},
+                )
             if scenario.isdigit():
                 return httpx2.Response(
                     int(scenario), json={"error": {"message": "hidden SDK error"}}
@@ -310,6 +317,8 @@ def test_app_sdk_and_database_integration(
             for record in caplog.records
             if record.request_id == message["request_id"]
         ]
-        assert events.count("db_saved") == 2
-        assert "ai_started" in events
-        assert ("ai_completed" if expected_code is None else "ai_failed") in events
+        assert events.count("db_save_succeeded") == 2
+        assert "ai_call_started" in events
+        assert (
+            "ai_call_succeeded" if expected_code is None else "ai_call_failed"
+        ) in events

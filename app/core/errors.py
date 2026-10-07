@@ -185,7 +185,7 @@ def _error_response(
     request_id = request.state.request_id
     content = error_body(request, code, ERROR_MESSAGES[code])
     log_event(
-        "db_failed" if code == "DB_ERROR" else "api_error",
+        "db_save_failed" if code == "DB_ERROR" else "api_error",
         request_id=request_id,
         result="failure",
         error_code=code,
@@ -283,12 +283,15 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(HTTPException, handle_http_error)
 
 
-def configure_request_processing(app: FastAPI) -> None:
+def configure_request_processing(
+    app: FastAPI, log_path: str | None = None
+) -> None:
     """요청 미들웨어·이벤트 로그·공통 오류 핸들러를 등록한다.
 
     Args:
         app: 공통 처리를 적용할 FastAPI 애플리케이션.
+        log_path: 관리자 조회용 이벤트 로그 파일 경로.
     """
-    configure_logging()
+    configure_logging(log_path)
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
