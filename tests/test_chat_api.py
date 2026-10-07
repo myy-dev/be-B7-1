@@ -409,7 +409,7 @@ async def verify_startup():
             tables = await connection.run_sync(
                 lambda sync_connection: inspect(sync_connection).get_table_names()
             )
-            assert set(tables) == {"chats", "chat_logs"}
+            assert set(tables) == {"users", "chats", "chat_logs"}
             assert await connection.scalar(text("PRAGMA foreign_keys")) == 1
 
 asyncio.run(verify_startup())
