@@ -6,7 +6,7 @@ from app.clients.ai import AIClient
 from app.core.errors import APIError
 from app.core.logging import log_event
 from app.models.chat import ChatLog
-from app.repositories.chat import ChatRepository
+from app.repositories.chat_repository import ChatRepository
 from app.schemas.chat import (
     ChatDetailResponse,
     ChatListResponse,
@@ -78,9 +78,7 @@ class ChatService:
             raise APIError("CHAT_NOT_FOUND")
         previous = await self.repository.list_recent_completed(chat_id)
         history = [
-            (item.question, item.answer)
-            for item in previous
-            if item.answer is not None
+            (item.question, item.answer) for item in previous if item.answer is not None
         ]
         message = ChatLog(
             request_id=request_id,
@@ -90,9 +88,7 @@ class ChatService:
             status="pending",
         )
         await self.repository.save_message(message)
-        log_event(
-            "db_saved", user_id=str(user_id), chat_id=chat_id, result="success"
-        )
+        log_event("db_saved", user_id=str(user_id), chat_id=chat_id, result="success")
         started_at = perf_counter()
         log_event("ai_started", user_id=str(user_id), chat_id=chat_id)
         try:
@@ -125,7 +121,5 @@ class ChatService:
         message.status = "completed"
         message.finished_at = datetime.now(UTC)
         await self.repository.save_message(message)
-        log_event(
-            "db_saved", user_id=str(user_id), chat_id=chat_id, result="success"
-        )
+        log_event("db_saved", user_id=str(user_id), chat_id=chat_id, result="success")
         return MessageResponse.model_validate(message)

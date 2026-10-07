@@ -12,8 +12,8 @@ from app.clients.ai import AIClient
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError
-from app.repositories.chat import ChatRepository
-from app.services.chat import ChatService
+from app.repositories.chat_repository import ChatRepository
+from app.services.chat_service import ChatService
 
 
 def get_request_id(request: Request) -> UUID:
