@@ -33,16 +33,13 @@ RequestId = Annotated[UUID, Depends(get_request_id)]
 
 
 async def get_current_user_id() -> int:
-    """인증 연동 전의 채팅 접근을 거절한다.
+    """로그인 구현 전 테스트용 사용자 ID를 반환한다.
 
     Returns:
-        인증 연동 후 제공할 정수 사용자 ID.
-
-    Raises:
-        APIError: 인증 계약이 미연동 상태이므로 UNAUTHORIZED를 반환한다.
+        DB에 존재해야 하는 테스트용 사용자 ID 1.
     """
-    # TODO: 유저 담당자의 인증 의존성에서 정수 ID를 받는다.
-    raise APIError("UNAUTHORIZED")
+    # TODO: 유저 담당자의 실제 인증 의존성으로 교체한다.
+    return 1
 
 
 CurrentUserId = Annotated[int, Depends(get_current_user_id)]
