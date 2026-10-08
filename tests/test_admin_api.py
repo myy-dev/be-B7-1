@@ -13,11 +13,30 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api.v1.admin_deps import require_admin
 from app.core.database import Base, get_db
 from app.main import app
 from app.models.chat import Chat, ChatLog
 from app.models.user import User
 from app.schemas.admin import UserDetail
+
+
+async def _admin_override() -> dict:
+    # 조회 동작 테스트는 인증 우회로 통과시킨다. 인증 자체는 아래 전용 테스트가 맡는다.
+    return {"role": "admin", "mock": False}
+
+
+@pytest.fixture(autouse=True)
+def _clear_auth_settings_cache(monkeypatch):
+    # AuthSettings가 lru_cache라 테스트 키가 실제 환경 키에 가려지지 않게 비운다.
+    from app.core.config import get_auth_settings
+
+    monkeypatch.setenv(
+        "JWT_SECRET_KEY", "test-only-secret-key-for-admin-tests-1234567890"
+    )
+    get_auth_settings.cache_clear()
+    yield
+    get_auth_settings.cache_clear()
 
 
 @pytest.fixture
@@ -91,6 +110,7 @@ def admin_db(tmp_path):
     chat_id = asyncio.run(initialize())
     previous = app.dependency_overrides.copy()
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[require_admin] = _admin_override
     try:
         yield chat_id
     finally:
@@ -105,8 +125,41 @@ def db_client(admin_db):
 
 
 def test_admin_route_passes_with_mock_gate(db_client):
-    # 인증은 아직 mock 통과(개발용)라, 게이트가 요청을 막지 않는지 확인한다.
+    # 조회 동작 테스트는 _admin_override 우회로 통과시킨다.
     assert db_client.get("/api/v1/admin/users").status_code == 200
+
+
+def test_admin_blocks_unauthenticated_without_override(admin_db):
+    # 우회 없이 부르면 헤더가 없어 401이다. 격리 DB는 세팅하되 require_admin은 둔다.
+    app.dependency_overrides.pop(require_admin, None)
+    try:
+        assert TestClient(app).get("/api/v1/admin/users").status_code == 401
+    finally:
+        app.dependency_overrides[require_admin] = _admin_override
+
+
+def test_admin_blocks_non_admin_role(admin_db, monkeypatch):
+    # 일반 사용자(role=user) JWT면 403이다. 우회를 떼고 실제 require_admin으로 친다.
+    from app.core.security import create_access_token
+
+    monkeypatch.delitem(app.dependency_overrides, require_admin)
+    token, _ = create_access_token(2)
+    res = TestClient(app).get(
+        "/api/v1/admin/users", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert res.status_code == 403
+
+
+def test_admin_allows_admin_role(admin_db, monkeypatch):
+    # 관리자(role=admin) JWT면 200이다. 같은 실제 경로로 확인한다.
+    from app.core.security import create_access_token
+
+    monkeypatch.delitem(app.dependency_overrides, require_admin)
+    token, _ = create_access_token(1)
+    res = TestClient(app).get(
+        "/api/v1/admin/users", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert res.status_code == 200
 
 
 def test_health():
@@ -233,6 +286,7 @@ def file_client(sample_log_file, tmp_path, monkeypatch):
 
     asyncio.run(initialize())
     monkeypatch.setitem(app.dependency_overrides, get_db, override_db)
+    monkeypatch.setitem(app.dependency_overrides, require_admin, _admin_override)
     settings = get_settings()
     monkeypatch.setattr(settings, "system_log_path", str(sample_log_file))
     yield TestClient(app)
