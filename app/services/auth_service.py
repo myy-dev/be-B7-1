@@ -1,10 +1,10 @@
 from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import AppError
-from app.core.security import hash_password
+from app.core.security import create_access_token, hash_password, verify_password
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
-from app.schemas.auth import SignupRequest
+from app.schemas.auth import LoginRequest, LoginResponse, SignupRequest
 
 
 def username_taken() -> AppError:
@@ -27,3 +27,17 @@ class AuthService:
             if await self.users.get_by_username(data.username) is not None:
                 raise username_taken() from None
             raise
+
+    # 로그인 API 구현
+    async def login(self, data: LoginRequest) -> LoginResponse:
+        user = await self.users.get_by_username(data.username)
+        valid = await verify_password(
+            data.password.get_secret_value(), user.password_hash if user else None
+        )
+        if not valid or user is None:
+            raise AppError(
+                "INVALID_CREDENTIALS", "아이디 또는 비밀번호가 올바르지 않습니다.", 401
+            )
+        token, expires_in = create_access_token(user.id)
+        await self.users.record_login(user)
+        return LoginResponse(access_token=token, expires_in=expires_in)
