@@ -145,10 +145,14 @@ def _assert_error(response: Response, status_code: int, code: str) -> None:
         ("GET", "/api/v1/chats/00000000-0000-4000-8000-000000000001", 404),
     ],
 )
-def test_mock_login_uses_fixed_owner_despite_spoofed_identity(
-    chat_api: _ChatAPI, method: str, path: str, status_code: int
+def test_login_rejects_spoofed_identity(
+    chat_api: _ChatAPI, method: str, path: str, status_code: int, monkeypatch
 ) -> None:
-    """임시 로그인은 요청의 임의 사용자 ID 대신 고정 사용자 1을 사용한다."""
+    """임의 사용자 ID와 위조 토큰으로 인증을 우회할 수 없다."""
+    from app.core.config import get_auth_settings
+
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-only-secret-for-chat-tests-123456789")
+    get_auth_settings.cache_clear()
     response = chat_api.client.request(
         method,
         path,
@@ -160,13 +164,9 @@ def test_mock_login_uses_fixed_owner_despite_spoofed_identity(
         params={"user_id": chat_api.user_id},
         json={"user_id": chat_api.user_id},
     )
-    assert response.status_code == status_code
-    if method == "POST":
-        assert chat_api.stored_chats()[0].user_id == 1
-    elif status_code == 200:
-        assert response.json() == {"items": []}
-    else:
-        _assert_error(response, 404, "CHAT_NOT_FOUND")
+    _assert_error(response, 401, "UNAUTHORIZED")
+    assert chat_api.stored_chats() == []
+    get_auth_settings.cache_clear()
 
 
 def test_create_persists_authenticated_owner(chat_api: _ChatAPI) -> None:
