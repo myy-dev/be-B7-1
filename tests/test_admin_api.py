@@ -148,6 +148,7 @@ def test_admin_blocks_non_admin_role(admin_db, monkeypatch):
         "/api/v1/admin/users", headers={"Authorization": f"Bearer {token}"}
     )
     assert res.status_code == 403
+    assert res.json()["error"]["code"] == "FORBIDDEN"
 
 
 def test_admin_allows_admin_role(admin_db, monkeypatch):

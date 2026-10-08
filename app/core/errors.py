@@ -20,6 +20,7 @@ from app.schemas.error import ErrorCode, ErrorResponse
 
 ERROR_STATUS_CODES: dict[ErrorCode, int] = {
     "UNAUTHORIZED": 401,
+    "FORBIDDEN": 403,
     "CHAT_NOT_FOUND": 404,
     "CHAT_BUSY": 409,
     "INVALID_INPUT": 422,
@@ -31,6 +32,7 @@ ERROR_STATUS_CODES: dict[ErrorCode, int] = {
 
 ERROR_MESSAGES: dict[ErrorCode, str] = {
     "UNAUTHORIZED": "로그인이 필요합니다.",
+    "FORBIDDEN": "접근 권한이 없습니다.",
     "CHAT_NOT_FOUND": "채팅방을 찾을 수 없습니다.",
     "CHAT_BUSY": "이전 질문을 처리 중입니다. 잠시 후 다시 시도해 주세요.",
     "INVALID_INPUT": "입력값을 확인해 주세요.",
@@ -260,6 +262,8 @@ async def handle_http_error(request: Request, exc: Exception) -> Response:
     code: ErrorCode
     if exc.status_code == 401:
         code = "UNAUTHORIZED"
+    elif exc.status_code == 403:
+        code = "FORBIDDEN"
     elif exc.status_code == 422:
         code = "INVALID_INPUT"
     else:
