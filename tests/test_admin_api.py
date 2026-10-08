@@ -124,7 +124,7 @@ def db_client(admin_db):
     yield TestClient(app)
 
 
-def test_admin_route_passes_with_mock_gate(db_client):
+def test_admin_route_passes_with_auth_override(db_client):
     # 조회 동작 테스트는 _admin_override 우회로 통과시킨다.
     assert db_client.get("/api/v1/admin/users").status_code == 200
 
