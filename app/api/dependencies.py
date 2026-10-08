@@ -1,11 +1,15 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Request
+import jwt
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.ai import AIClient
 from app.core.database import get_db
+from app.core.security import decode_access_token
+from app.models.user import User
 from app.repositories.chat_repository import ChatRepository
 from app.services.chat_service import ChatService
 
@@ -26,14 +30,29 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 RequestId = Annotated[UUID, Depends(get_request_id)]
 
 
-async def get_current_user_id() -> int:
-    """로그인 구현 전 테스트용 사용자 ID를 반환한다.
+# 로그인 API 구현
+bearer = HTTPBearer(auto_error=False)
 
-    Returns:
-        DB에 존재해야 하는 테스트용 사용자 ID 1.
-    """
-    # TODO: 유저 담당자의 실제 인증 의존성으로 교체한다.
-    return 1
+
+# 로그인 API 구현
+async def get_current_user_id(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    db: DBSession,
+) -> int:
+    unauthorized = HTTPException(
+        status_code=401,
+        detail="로그인이 필요합니다.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if credentials is None:
+        raise unauthorized
+    try:
+        user_id = decode_access_token(credentials.credentials)
+    except (jwt.InvalidTokenError, ValueError):
+        raise unauthorized from None
+    if await db.get(User, user_id) is None:
+        raise unauthorized
+    return user_id
 
 
 CurrentUserId = Annotated[int, Depends(get_current_user_id)]

@@ -10,7 +10,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 
-from app.api.dependencies import get_ai_client, get_chat_service
+from app.api.dependencies import get_ai_client, get_chat_service, get_current_user_id
 from app.api.error_responses import error_response
 from app.api.v1.endpoints.chat import router
 from app.core.errors import APIError, configure_request_processing, internal_error
@@ -34,6 +34,7 @@ def docs_client() -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     configure_request_processing(app)
+    app.dependency_overrides[get_current_user_id] = lambda: 1
     with TestClient(app, raise_server_exceptions=False) as client:
         yield client
 
@@ -56,7 +57,8 @@ def test_errors_use_common_schema_and_named_examples(docs_client: TestClient) ->
                 for code, example in media["examples"].items():
                     payload = ErrorResponse.model_validate(example["value"])
                     assert payload.error.code == code
-                    assert code != "UNAUTHORIZED"
+                    if code == "UNAUTHORIZED":
+                        assert status == "401"
     for path, method in [("/api/v1/chats", "post"), (CHAT_PATH, "get")]:
         examples = schema["paths"][path][method]["responses"]["500"]["content"][
             "application/json"
