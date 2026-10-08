@@ -10,7 +10,9 @@ from app.api.error_responses import (
     CHAT_NOT_FOUND_RESPONSE,
     DB_ERROR_RESPONSE,
     INVALID_INPUT_RESPONSE,
+    error_response,
 )
+from app.core.errors import APIError
 from app.schemas.chat import (
     ChatDetailResponse,
     ChatListResponse,
@@ -19,7 +21,12 @@ from app.schemas.chat import (
     MessageResponse,
 )
 
-router = APIRouter(prefix="/chats", tags=["chats"])
+# 로그인 API 구현
+router = APIRouter(
+    prefix="/chats",
+    tags=["chats"],
+    responses={401: error_response(APIError("UNAUTHORIZED"))},
+)
 
 
 @router.post(

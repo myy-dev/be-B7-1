@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,3 +24,12 @@ class UserRepository:
             await self.session.rollback()
             raise
         return user
+
+    # 로그인 API 구현
+    async def record_login(self, user: User) -> None:
+        user.last_login_at = datetime.now(UTC)
+        try:
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise

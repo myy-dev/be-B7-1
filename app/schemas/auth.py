@@ -28,3 +28,23 @@ class SignupResponse(BaseModel):
     username: str
     name: str
     created_at: UtcDateTime
+
+
+# 로그인 API 구현
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=4, max_length=20, pattern=r"^[a-zA-Z0-9_]+$")
+    password: SecretStr = Field(min_length=8, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username(cls, value: str) -> str:
+        return value.lower()
+
+
+# 로그인 API 구현
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int

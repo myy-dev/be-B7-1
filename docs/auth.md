@@ -50,11 +50,40 @@
 앱 시작 시 테이블을 생성하므로 별도 SQL 실행은 필요하지 않습니다.
 
 가입 완료 후 프론트는 로그인 화면으로 이동합니다. 이 API는 로그인하거나 토큰을
-발급하지 않습니다. 로그인·JWT 발급은 후속 구현이며 관리자 회원 조회는 아직 mock
-저장소를 사용합니다.
+발급하지 않습니다. 관리자 회원 조회와 관리자 권한 검사는 아직 mock 구현입니다.
 
 테스트는 임시 SQLite DB를 사용해 개발 DB를 수정하지 않습니다.
 
 ```bash
 uv run --with pytest pytest
 ```
+
+## 로그인 API
+
+`POST /api/v1/auth/login`
+
+```json
+{"username": "Test_User", "password": "my-secure-password"}
+```
+
+성공 시 `200 OK`:
+
+```json
+{"access_token": "JWT 문자열", "token_type": "bearer", "expires_in": 1800}
+```
+
+아이디는 대소문자를 구분하지 않으며 비밀번호 공백은 그대로 비교합니다.
+없는 아이디와 잘못된 비밀번호는 동일한 `401 INVALID_CREDENTIALS`를 반환합니다.
+입력 규칙 위반은 `422 INVALID_INPUT`입니다. 성공 시 `last_login_at`을 갱신합니다.
+
+`.env`에 `JWT_SECRET_KEY`를 설정하세요. `openssl rand -hex 32`로 생성한
+무작위 키를 사용하며 최소 32자가 필요합니다. 설정이 없거나 잘못되면 로그인은
+`503 AUTH_CONFIGURATION_ERROR`를 반환합니다. 토큰 만료 시간은
+`ACCESS_TOKEN_EXPIRE_MINUTES`(기본 30분)입니다.
+
+채팅 API 요청에는 `Authorization: Bearer <access_token>`을 전달하세요.
+Swagger의 Authorize에도 발급된 토큰을 입력할 수 있습니다.
+토큰 누락·만료·위조 또는 삭제된 회원은 `401 UNAUTHORIZED`를 반환합니다.
+토큰은 HS256 서명과 필수 sub/iat/exp를 검증합니다
+([PyJWT 문서](https://pyjwt.readthedocs.io/en/latest/usage.html)).
+갱신 토큰과 서버 로그아웃은 제공하지 않으며 만료 후 다시 로그인합니다.
