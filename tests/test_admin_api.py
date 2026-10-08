@@ -38,6 +38,7 @@ def admin_db(tmp_path):
                     username="user_a",
                     password_hash="test-only",
                     name="사용자A",
+                    role="admin",
                     created_at=now,
                     last_login_at=now,
                 )
@@ -48,6 +49,7 @@ def admin_db(tmp_path):
                     username="user_b",
                     password_hash="test-only",
                     name="사용자B",
+                    role="user",
                     created_at=now,
                     last_login_at=None,
                 )
