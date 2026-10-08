@@ -84,6 +84,43 @@ def test_chat_defaults_and_large_owner_id(model_engine: Engine) -> None:
         assert chat is not None
         assert chat.user_id == 9_000_000_001
         assert chat.created_at.tzinfo is UTC
+        assert chat.deleted_at is None
+
+
+def test_deleted_at_round_trip_preserves_chat_and_messages(
+    model_engine: Engine,
+) -> None:
+    """삭제 시각을 UTC로 재조회하며 채팅방과 대화 기록을 그대로 유지한다.
+
+    Args:
+        model_engine: 외래키가 적용된 테스트용 SQLite 엔진.
+    """
+    chat_id = _create_chat(model_engine)
+    request_id = uuid4()
+    with Session(model_engine) as session:
+        session.add(
+            ChatLog(
+                request_id=request_id,
+                chat_id=chat_id,
+                question="보존할 질문",
+                model="test-model",
+            )
+        )
+        chat = session.get(Chat, chat_id)
+        assert chat is not None
+        chat.deleted_at = datetime(2026, 10, 9, 12, tzinfo=timezone(timedelta(hours=9)))
+        session.commit()
+
+    with Session(model_engine) as session:
+        chat = session.get(Chat, chat_id)
+        assert chat is not None
+        assert chat.deleted_at == datetime(2026, 10, 9, 3, tzinfo=UTC)
+        assert chat.deleted_at.tzinfo is UTC
+        log = session.get(ChatLog, request_id)
+        assert log is not None
+        assert log.question == "보존할 질문"
+        assert log.status == "pending"
+        assert session.execute(text("PRAGMA foreign_key_check")).all() == []
 
 
 def test_request_id_and_results_survive_engine_restart(model_engine: Engine) -> None:

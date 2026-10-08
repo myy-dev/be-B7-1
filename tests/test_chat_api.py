@@ -143,6 +143,7 @@ def _assert_error(response: Response, status_code: int, code: str) -> None:
         ("POST", "/api/v1/chats", 201),
         ("GET", "/api/v1/chats", 200),
         ("GET", "/api/v1/chats/00000000-0000-4000-8000-000000000001", 404),
+        ("DELETE", "/api/v1/chats/00000000-0000-4000-8000-000000000001", 404),
     ],
 )
 def test_login_rejects_spoofed_identity(
@@ -348,8 +349,9 @@ def test_detail_includes_all_statuses_in_order(chat_api: _ChatAPI) -> None:
 
 
 @pytest.mark.parametrize("owned_by_other", [False, True])
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
 def test_missing_and_unowned_chats_share_404(
-    chat_api: _ChatAPI, owned_by_other: bool
+    chat_api: _ChatAPI, owned_by_other: bool, method: str
 ) -> None:
     """없는 채팅방과 타인 채팅방을 같은 404 응답으로 처리한다."""
     chat_api.authenticate()
@@ -362,14 +364,19 @@ def test_missing_and_unowned_chats_share_404(
                 created_at=datetime(2026, 10, 5, tzinfo=UTC),
             )
         )
-    response = chat_api.client.get(f"/api/v1/chats/{chat_id}")
+    response = chat_api.client.request(method, f"/api/v1/chats/{chat_id}")
     _assert_error(response, 404, "CHAT_NOT_FOUND")
+    if owned_by_other:
+        assert chat_api.stored_chats()[0].deleted_at is None
 
 
-def test_invalid_chat_uuid_returns_input_error(chat_api: _ChatAPI) -> None:
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_invalid_chat_uuid_returns_input_error(
+    chat_api: _ChatAPI, method: str
+) -> None:
     """잘못된 UUID 경로는 공통 입력 오류로 반환한다."""
     chat_api.authenticate()
-    response = chat_api.client.get("/api/v1/chats/not-a-uuid")
+    response = chat_api.client.request(method, "/api/v1/chats/not-a-uuid")
     _assert_error(response, 422, "INVALID_INPUT")
 
 
@@ -379,6 +386,7 @@ def test_invalid_chat_uuid_returns_input_error(chat_api: _ChatAPI) -> None:
         ("POST", "/api/v1/chats"),
         ("GET", "/api/v1/chats"),
         ("GET", "/api/v1/chats/00000000-0000-4000-8000-000000000001"),
+        ("DELETE", "/api/v1/chats/00000000-0000-4000-8000-000000000001"),
     ],
 )
 def test_sql_failure_returns_database_error(
@@ -477,6 +485,76 @@ def _messages(chat_api: _ChatAPI) -> list[ChatLog]:
             return list((await session.scalars(select(ChatLog))).all())
 
     return asyncio.run(read())
+
+
+def test_delete_chat_is_hidden_and_new_question_does_not_call_ai(
+    chat_api: _ChatAPI,
+) -> None:
+    """삭제 API는 UTC 시각 저장 후 본문 없이 응답하고 조회·새 질문을 차단한다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    chat_id = UUID(chat_api.client.post("/api/v1/chats").json()["chat_id"])
+
+    before = datetime.now(UTC)
+    response = chat_api.client.delete(f"/api/v1/chats/{chat_id}")
+    after = datetime.now(UTC)
+    assert response.status_code == 204
+    assert response.content == b""
+    assert "content-type" not in response.headers
+    assert UUID(response.headers["X-Request-ID"]).version == 4
+    stored = chat_api.stored_chats()[0]
+    assert stored.deleted_at is not None
+    assert stored.deleted_at.tzinfo == UTC
+    assert before <= stored.deleted_at <= after
+    _assert_error(
+        chat_api.client.delete(f"/api/v1/chats/{chat_id}"), 404, "CHAT_NOT_FOUND"
+    )
+    assert chat_api.stored_chats()[0].deleted_at == stored.deleted_at
+    assert chat_api.client.get("/api/v1/chats").json() == {"items": []}
+    _assert_error(
+        chat_api.client.get(f"/api/v1/chats/{chat_id}"), 404, "CHAT_NOT_FOUND"
+    )
+    _assert_error(
+        chat_api.client.post(
+            f"/api/v1/chats/{chat_id}/messages", json={"question": "새 질문"}
+        ),
+        404,
+        "CHAT_NOT_FOUND",
+    )
+    ai.generate_answer.assert_not_awaited()
+    assert _messages(chat_api) == []
+
+
+def test_delete_chat_with_pending_record_keeps_data(chat_api: _ChatAPI) -> None:
+    """pending 기록이 있어도 삭제를 허용하고 채팅방과 질문을 보존한다."""
+    chat_api.authenticate()
+    chat_id = UUID(chat_api.client.post("/api/v1/chats").json()["chat_id"])
+    request_id = UUID("00000000-0000-4000-8000-000000000001")
+    chat_api.seed(
+        ChatLog(
+            request_id=request_id,
+            chat_id=chat_id,
+            question="처리 중 질문",
+            model="test-model",
+            status="pending",
+        )
+    )
+    response = chat_api.client.delete(f"/api/v1/chats/{chat_id}")
+    assert response.status_code == 204
+    assert response.content == b""
+    stored = chat_api.stored_chats()
+    assert len(stored) == 1
+    assert stored[0].chat_id == chat_id
+    assert stored[0].deleted_at is not None
+    messages = _messages(chat_api)
+    assert len(messages) == 1
+    assert messages[0].request_id == request_id
+    assert messages[0].chat_id == chat_id
+    assert messages[0].question == "처리 중 질문"
+    assert messages[0].status == "pending"
+    assert messages[0].answer is None
+    assert messages[0].error_code is None
+    assert messages[0].finished_at is None
 
 
 def test_question_answer_is_committed_and_reused_as_context(

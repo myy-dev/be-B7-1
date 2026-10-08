@@ -10,8 +10,6 @@
 | POST | `/api/v1/chats/{chat_id}/messages` | 질문 전송 및 AI 답변 반환 | 201 |
 | DELETE | `/api/v1/chats/{chat_id}` | 세션 논리 삭제 | 204 |
 
-세션 논리 삭제는 계약 문서화 단계이며 아직 구현되지 않았다. 모델·기존 DB 반영과 API 구현은 후속 단계에서 수행한다.
-
 ---
 
 ## 1. 세션 생성

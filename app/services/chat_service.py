@@ -86,6 +86,18 @@ class ChatService:
             messages=[MessageResponse.model_validate(message) for message in messages],
         )
 
+    async def delete_chat(self, chat_id: UUID, user_id: int) -> None:
+        """본인 채팅방을 논리 삭제하고 대상이 없으면 조회 오류를 반환한다."""
+        deleted = await self.repository.soft_delete(chat_id, user_id, datetime.now(UTC))
+        if not deleted:
+            raise APIError("CHAT_NOT_FOUND")
+        log_event(
+            "db_save_succeeded",
+            user_id=str(user_id),
+            chat_id=chat_id,
+            result="success",
+        )
+
     async def send_message(
         self,
         chat_id: UUID,

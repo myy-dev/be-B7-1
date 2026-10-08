@@ -34,6 +34,9 @@ class Chat(Base):
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTimeType(), nullable=False, default=func.now()
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTimeType(), nullable=True
+    )
 
 
 class ChatLog(Base):

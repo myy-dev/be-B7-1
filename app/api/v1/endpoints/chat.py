@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Request, Response, status
 
 from app.api.dependencies import AIClientDep, ChatServiceDep, CurrentUserId, RequestId
 from app.api.error_responses import (
@@ -94,6 +94,29 @@ async def get_chat(
 ) -> ChatDetailResponse:
     request.state.chat_id = chat_id
     return await service.get_chat(chat_id, user_id)
+
+
+@router.delete(
+    "/{chat_id}",
+    response_class=Response,
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="채팅방 삭제",
+    description=("현재 사용자 소유의 채팅방을 논리 삭제합니다. "),
+    responses={
+        404: CHAT_NOT_FOUND_RESPONSE,
+        422: INVALID_INPUT_RESPONSE,
+        500: DB_ERROR_RESPONSE,
+    },
+)
+async def delete_chat(
+    chat_id: UUID,
+    request: Request,
+    user_id: CurrentUserId,
+    service: ChatServiceDep,
+) -> Response:
+    request.state.chat_id = chat_id
+    await service.delete_chat(chat_id, user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

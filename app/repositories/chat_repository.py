@@ -1,6 +1,7 @@
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,10 +24,10 @@ class ChatRepository:
         return chat
 
     async def list_by_user(self, user_id: int) -> list[Chat]:
-        """소유자의 전체 채팅방을 생성 시각·ID 내림차순으로 조회한다."""
+        """소유자의 미삭제 채팅방을 생성 시각·ID 내림차순으로 조회한다."""
         result = await self.session.scalars(
             select(Chat)
-            .where(Chat.user_id == user_id)
+            .where(Chat.user_id == user_id, Chat.deleted_at.is_(None))
             .order_by(Chat.created_at.desc(), Chat.chat_id.desc())
         )
         return list(result.all())
@@ -69,10 +70,35 @@ class ChatRepository:
         return message
 
     async def get_by_id_and_user(self, chat_id: UUID, user_id: int) -> Chat | None:
-        """ID와 소유자가 모두 일치하는 채팅방을 조회한다."""
+        """ID와 소유자가 모두 일치하는 미삭제 채팅방을 조회한다."""
         return await self.session.scalar(
-            select(Chat).where(Chat.chat_id == chat_id, Chat.user_id == user_id)
+            select(Chat).where(
+                Chat.chat_id == chat_id,
+                Chat.user_id == user_id,
+                Chat.deleted_at.is_(None),
+            )
         )
+
+    async def soft_delete(
+        self, chat_id: UUID, user_id: int, deleted_at: datetime
+    ) -> bool:
+        """소유자의 미삭제 채팅방에 삭제 시각을 저장하고 성공 여부를 반환한다."""
+        try:
+            deleted_id = await self.session.scalar(
+                update(Chat)
+                .where(
+                    Chat.chat_id == chat_id,
+                    Chat.user_id == user_id,
+                    Chat.deleted_at.is_(None),
+                )
+                .values(deleted_at=deleted_at)
+                .returning(Chat.chat_id)
+            )
+            await self.session.commit()
+        except SQLAlchemyError:
+            await self.session.rollback()
+            raise
+        return deleted_id is not None
 
     async def list_messages(self, chat_id: UUID) -> list[ChatLog]:
         """채팅방의 전체 기록을 생성 시각·요청 ID 오름차순으로 조회한다."""
