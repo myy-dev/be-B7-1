@@ -1,30 +1,54 @@
-from fastapi import Header
+from typing import Annotated
 
+import jwt
+from fastapi import Header, HTTPException
+from sqlalchemy import select
+
+from app.api.dependencies import DBSession
 from app.core.config import get_settings
-from app.repositories.admin_mock import (
-    MockChatLogRepository,
-    MockSessionRepository,
-    MockUserRepository,
+from app.core.security import decode_access_token
+from app.models.user import User
+from app.repositories.admin_db import (
+    DbChatLogRepository,
+    DbSessionRepository,
+    DbUserRepository,
 )
 from app.repositories.admin_system_log import SystemLogFileRepository
 from app.services.admin_service import AdminService
 
 
-def require_admin(authorization: str | None = Header(default=None)) -> dict:
+async def require_admin(
+    db: DBSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict:
     # 관리자 판정은 세션 쿠키가 아니라 Authorization 헤더(JWT)로 한다. 쿠키를 쓰지
-    # 않으므로 쿠키가 위조돼도 관리자 권한이 바뀌지 않는다. 지금은 검사 없이 통과하는
-    # 임시 구현이라 아직은 누구나 통과한다.
-    # TODO(회원 담당): JWT·role이 정해지면 authorization을 검증해 관리자만 통과시킨다.
-    return {"role": "admin", "mock": True}
+    # 않으므로 쿠키가 위조돼도 관리자 권한이 바뀌지 않는다.
+    forbidden = HTTPException(status_code=403, detail="관리자 권한이 필요합니다.")
+    unauthorized = HTTPException(
+        status_code=401,
+        detail="로그인이 필요합니다.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if not authorization or not authorization.startswith("Bearer "):
+        raise unauthorized
+    try:
+        user_id = decode_access_token(authorization[7:])
+    except (jwt.InvalidTokenError, ValueError):
+        raise unauthorized from None
+    role = await db.scalar(select(User.role).where(User.id == user_id))
+    if role is None:
+        raise unauthorized
+    if role != "admin":
+        raise forbidden
+    return {"role": "admin", "mock": False}
 
 
-def get_admin_service() -> AdminService:
-    # 저장소 구현만 바꾸면 서비스·라우터는 그대로다(Mock → 실제 DB).
-    # TODO(회원·채팅 담당): 스키마가 나오면 Mock 저장소를 실제 구현으로 바꾼다.
+def get_admin_service(db: DBSession) -> AdminService:
+    # 회원·대화·세션은 실제 DB에서 읽는다. 시스템 로그만 파일 조회다.
     settings = get_settings()
     return AdminService(
-        users=MockUserRepository(),
-        chat_logs=MockChatLogRepository(),
-        sessions=MockSessionRepository(),
+        users=DbUserRepository(db),
+        chat_logs=DbChatLogRepository(db),
+        sessions=DbSessionRepository(db),
         system_logs=SystemLogFileRepository(settings.system_log_path),
     )

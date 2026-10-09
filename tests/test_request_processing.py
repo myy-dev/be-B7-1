@@ -260,23 +260,36 @@ def test_existing_admin_routes_keep_error_contract(
     event_logs: pytest.LogCaptureFixture,
 ) -> None:
     """설정 파일을 읽지 않고 실제 관리자 라우터와 오류 형식을 검증한다."""
-    from app.api.v1.admin_deps import get_admin_service
-    from app.main import app
-    from app.repositories.admin_mock import (
-        MockChatLogRepository,
-        MockSessionRepository,
-        MockUserRepository,
-    )
-    from app.repositories.admin_system_log import SystemLogFileRepository
-    from app.services.admin_service import AdminService
+    import asyncio
 
-    service = AdminService(
-        users=MockUserRepository(),
-        chat_logs=MockChatLogRepository(),
-        sessions=MockSessionRepository(),
-        system_logs=SystemLogFileRepository(str(tmp_path / "system.jsonl")),
-    )
-    monkeypatch.setitem(app.dependency_overrides, get_admin_service, lambda: service)
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.core.database import Base
+    from app.main import app
+    from app.models.user import User
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'proc.db'}")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def initialize():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with sessions() as session:
+            session.add(
+                User(
+                    username="proc_user",
+                    password_hash="test-only",
+                    name="처리",
+                )
+            )
+            await session.commit()
+
+    async def override_db():
+        async with sessions() as session:
+            yield session
+
+    asyncio.run(initialize())
+    monkeypatch.setitem(app.dependency_overrides, get_db, override_db)
     client = TestClient(app)
     try:
         listing = client.get("/api/v1/admin/users")

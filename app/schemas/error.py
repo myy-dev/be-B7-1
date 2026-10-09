@@ -4,6 +4,7 @@ from pydantic import UUID4, BaseModel, Field
 
 ErrorCode = Literal[
     "UNAUTHORIZED",
+    "FORBIDDEN",
     "CHAT_NOT_FOUND",
     "CHAT_BUSY",
     "INVALID_INPUT",

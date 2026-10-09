@@ -1,87 +1,223 @@
 """관리자 조회 API 테스트.
 
-대부분은 스키마 확정 전이라 mock 저장소로 응답 형식과 동작을 검증한다.
-시스템 로그만 실제 파일을 읽으므로 파일→API 전 구간까지 확인한다.
-저장소·인증이 실제 구현으로 바뀌면 mock 전제의 테스트만 갱신하면 된다.
+회원·대화·세션은 실제 DB에서 읽는다(격리 SQLite). 시스템 로그만 실제 파일을
+읽으므로 파일→API 전 구간까지 확인한다.
 """
 
+import asyncio
 import json
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.api.v1.admin_deps import get_admin_service
+from app.api.v1.admin_deps import require_admin
+from app.core.database import Base, get_db
 from app.main import app
-from app.repositories.admin_mock import (
-    MockChatLogRepository,
-    MockSessionRepository,
-    MockUserRepository,
-)
-from app.repositories.admin_system_log import SystemLogFileRepository
+from app.models.chat import Chat, ChatLog
+from app.models.user import User
 from app.schemas.admin import UserDetail
-from app.services.admin_service import AdminService
-
-client = TestClient(app)
 
 
-def test_admin_route_passes_with_mock_gate():
-    # 인증은 아직 mock 통과(개발용)라, 게이트가 요청을 막지 않는지 확인한다.
-    assert client.get("/api/v1/admin/users").status_code == 200
+async def _admin_override() -> dict:
+    # 조회 동작 테스트는 인증 우회로 통과시킨다. 인증 자체는 아래 전용 테스트가 맡는다.
+    return {"role": "admin", "mock": False}
+
+
+@pytest.fixture(autouse=True)
+def _clear_auth_settings_cache(monkeypatch):
+    # AuthSettings가 lru_cache라 테스트 키가 실제 환경 키에 가려지지 않게 비운다.
+    from app.core.config import get_auth_settings
+
+    monkeypatch.setenv(
+        "JWT_SECRET_KEY", "test-only-secret-key-for-admin-tests-1234567890"
+    )
+    get_auth_settings.cache_clear()
+    yield
+    get_auth_settings.cache_clear()
+
+
+@pytest.fixture
+def admin_db(tmp_path):
+    """격리 DB에 회원 2명·세션 1개·기록 2건을 심는다."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'admin.db'}")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def initialize():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with sessions() as session:
+            now = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)
+            chat_id = uuid4()
+            session.add(
+                User(
+                    id=1,
+                    username="user_a",
+                    password_hash="test-only",
+                    name="사용자A",
+                    role="admin",
+                    created_at=now,
+                    last_login_at=now,
+                )
+            )
+            session.add(
+                User(
+                    id=2,
+                    username="user_b",
+                    password_hash="test-only",
+                    name="사용자B",
+                    role="user",
+                    created_at=now,
+                    last_login_at=None,
+                )
+            )
+            session.add(Chat(chat_id=chat_id, user_id=1, created_at=now))
+            session.add(
+                ChatLog(
+                    request_id=uuid4(),
+                    chat_id=chat_id,
+                    question="배포 방법 알려줘",
+                    answer="Vercel과 백엔드 배포 경로를 안내합니다.",
+                    status="completed",
+                    error_code=None,
+                    model="test-model",
+                    created_at=now,
+                    finished_at=now,
+                )
+            )
+            session.add(
+                ChatLog(
+                    request_id=uuid4(),
+                    chat_id=chat_id,
+                    question="아까 뭐 물어봤지?",
+                    answer=None,
+                    status="failed",
+                    error_code="AI_TIMEOUT",
+                    model="test-model",
+                    created_at=now,
+                    finished_at=now,
+                )
+            )
+            await session.commit()
+            return chat_id
+
+    async def override_db():
+        async with sessions() as session:
+            yield session
+
+    chat_id = asyncio.run(initialize())
+    previous = app.dependency_overrides.copy()
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[require_admin] = _admin_override
+    try:
+        yield chat_id
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)
+        asyncio.run(engine.dispose())
+
+
+@pytest.fixture
+def db_client(admin_db):
+    yield TestClient(app)
+
+
+def test_admin_route_passes_with_auth_override(db_client):
+    # 조회 동작 테스트는 _admin_override 우회로 통과시킨다.
+    assert db_client.get("/api/v1/admin/users").status_code == 200
+
+
+def test_admin_blocks_unauthenticated_without_override(admin_db):
+    # 우회 없이 부르면 헤더가 없어 401이다. 격리 DB는 세팅하되 require_admin은 둔다.
+    app.dependency_overrides.pop(require_admin, None)
+    try:
+        assert TestClient(app).get("/api/v1/admin/users").status_code == 401
+    finally:
+        app.dependency_overrides[require_admin] = _admin_override
+
+
+def test_admin_blocks_non_admin_role(admin_db, monkeypatch):
+    # 일반 사용자(role=user) JWT면 403이다. 우회를 떼고 실제 require_admin으로 친다.
+    from app.core.security import create_access_token
+
+    monkeypatch.delitem(app.dependency_overrides, require_admin)
+    token, _ = create_access_token(2)
+    res = TestClient(app).get(
+        "/api/v1/admin/users", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert res.status_code == 403
+    assert res.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_admin_allows_admin_role(admin_db, monkeypatch):
+    # 관리자(role=admin) JWT면 200이다. 같은 실제 경로로 확인한다.
+    from app.core.security import create_access_token
+
+    monkeypatch.delitem(app.dependency_overrides, require_admin)
+    token, _ = create_access_token(1)
+    res = TestClient(app).get(
+        "/api/v1/admin/users", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert res.status_code == 200
 
 
 def test_health():
     # 앱이 정상 기동해 헬스 응답을 내는지 확인한다.
-    assert client.get("/health").json() == {"status": "ok"}
+    assert TestClient(app).get("/health").json() == {"status": "ok"}
 
 
-def test_list_users_returns_page():
+def test_list_users_returns_page(db_client):
     # 회원 목록이 공통 페이지 형태(items·total·page·size)로 오는지 확인한다.
-    res = client.get("/api/v1/admin/users")
+    res = db_client.get("/api/v1/admin/users")
     assert res.status_code == 200
     body = res.json()
     assert set(body) >= {"items", "total", "page", "size"}
     assert body["total"] >= 1
 
 
-def test_list_users_slices_by_page():
+def test_list_users_slices_by_page(db_client):
     # 페이지마다 다른 항목이 오고, total은 전체 수로 일정한지 확인한다.
     # (저장소가 실제로 자르는지 — 이전에 mock이 페이지를 무시하던 회귀 방지)
-    first = client.get("/api/v1/admin/users", params={"page": 1, "size": 1}).json()
-    second = client.get("/api/v1/admin/users", params={"page": 2, "size": 1}).json()
+    first = db_client.get("/api/v1/admin/users", params={"page": 1, "size": 1}).json()
+    second = db_client.get("/api/v1/admin/users", params={"page": 2, "size": 1}).json()
     assert len(first["items"]) == 1
     assert len(second["items"]) == 1
     assert first["items"][0]["id"] != second["items"][0]["id"]
     assert first["total"] == second["total"] == 2
 
 
-def test_user_detail_serializes_only_declared_fields():
+def test_user_detail_serializes_only_declared_fields(db_client):
     # 응답이 스키마에 선언한 필드만 나가는지(민감 필드 노출 차단) 확인한다.
-    detail = client.get("/api/v1/admin/users/1").json()
+    detail = db_client.get("/api/v1/admin/users/1").json()
     assert set(detail) <= set(UserDetail.model_fields)
     assert "password" not in json.dumps(detail).lower()
 
 
-def test_get_user_not_found_returns_standard_error():
+def test_get_user_not_found_returns_standard_error(db_client):
     # 없는 회원은 404와 공통 에러 형식(code·request_id)으로 오는지 확인한다.
-    res = client.get("/api/v1/admin/users/9999")
+    res = db_client.get("/api/v1/admin/users/9999")
     assert res.status_code == 404
     error = res.json()["error"]
     assert error["code"] == "USER_NOT_FOUND"
     assert isinstance(error["request_id"], str) and error["request_id"]
 
 
-def test_list_logs_filters_by_user():
+def test_list_logs_filters_by_user(db_client):
     # 대화 기록이 그 회원 소유 세션으로 걸러지는지 확인한다(기록은 chat_id로 묶임).
-    res = client.get("/api/v1/admin/logs", params={"user_id": 1})
+    res = db_client.get("/api/v1/admin/logs", params={"user_id": 1})
     assert res.status_code == 200
     assert res.json()["total"] == 2
     # 소유 세션이 없는 회원은 0건이다.
-    assert client.get("/api/v1/admin/logs", params={"user_id": 2}).json()["total"] == 0
+    assert (
+        db_client.get("/api/v1/admin/logs", params={"user_id": 2}).json()["total"] == 0
+    )
 
 
-def test_logs_return_record_fields():
+def test_logs_return_record_fields(db_client):
     # 대화 기록이 request_id·status·error_code 등 기록 필드로 오는지 확인한다.
-    items = client.get("/api/v1/admin/logs", params={"user_id": 1}).json()["items"]
+    items = db_client.get("/api/v1/admin/logs", params={"user_id": 1}).json()["items"]
     assert items
     expected = {
         "request_id",
@@ -98,19 +234,19 @@ def test_logs_return_record_fields():
     assert statuses <= {"pending", "completed", "failed"}
 
 
-def test_sessions_and_detail():
+def test_sessions_and_detail(db_client):
     # 사용자 세션 목록 → 세션 상세(그 세션의 대화 포함) 흐름을 확인한다.
-    listing = client.get("/api/v1/admin/sessions", params={"user_id": 1}).json()
+    listing = db_client.get("/api/v1/admin/sessions", params={"user_id": 1}).json()
     assert listing["total"] >= 1
     chat_id = listing["items"][0]["chat_id"]
-    detail = client.get(f"/api/v1/admin/sessions/{chat_id}").json()
+    detail = db_client.get(f"/api/v1/admin/sessions/{chat_id}").json()
     assert detail["chat_id"] == chat_id
     assert isinstance(detail["messages"], list)
 
 
-def test_get_session_not_found():
+def test_get_session_not_found(db_client):
     # 없는 세션은 404와 공통 에러 형식으로 오는지 확인한다.
-    res = client.get("/api/v1/admin/sessions/9999")
+    res = db_client.get(f"/api/v1/admin/sessions/{uuid4()}")
     assert res.status_code == 404
     assert res.json()["error"]["code"] == "SESSION_NOT_FOUND"
 
@@ -134,17 +270,28 @@ def sample_log_file(tmp_path):
 
 
 @pytest.fixture
-def file_client(sample_log_file):
-    # 시스템 로그 저장소만 임시 파일로 바꿔치고 나머지는 mock을 유지한다.
-    # 끝나면 오버라이드를 지워 다른 테스트에 새지 않게 한다.
-    app.dependency_overrides[get_admin_service] = lambda: AdminService(
-        users=MockUserRepository(),
-        chat_logs=MockChatLogRepository(),
-        sessions=MockSessionRepository(),
-        system_logs=SystemLogFileRepository(str(sample_log_file)),
-    )
+def file_client(sample_log_file, tmp_path, monkeypatch):
+    # 빈 DB + 임시 시스템 로그 파일로 실제 의존성 체인을 그대로 쓴다.
+    from app.core.config import get_settings
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'file.db'}")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def initialize():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def override_db():
+        async with sessions() as session:
+            yield session
+
+    asyncio.run(initialize())
+    monkeypatch.setitem(app.dependency_overrides, get_db, override_db)
+    monkeypatch.setitem(app.dependency_overrides, require_admin, _admin_override)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "system_log_path", str(sample_log_file))
     yield TestClient(app)
-    app.dependency_overrides.clear()
+    asyncio.run(engine.dispose())
 
 
 def test_system_logs_read_from_file_with_event_filter(file_client):
@@ -299,10 +446,10 @@ def test_system_logs_reversed_period_returns_empty_page(file_client):
     assert body["total"] == 0
 
 
-def test_validation_error_uses_common_error_shape():
+def test_validation_error_uses_common_error_shape(db_client):
     # 422도 FastAPI 기본 형식(detail)이 아니라 공통 오류 형식으로 나가는지 확인한다.
     # (프론트가 error.message로 사용자 문구를 꺼내는 계약)
-    res = client.get("/api/v1/admin/users", params={"page": 0})
+    res = db_client.get("/api/v1/admin/users", params={"page": 0})
     assert res.status_code == 422
     error = res.json()["error"]
     assert error["code"] == "INVALID_INPUT"
@@ -311,21 +458,23 @@ def test_validation_error_uses_common_error_shape():
     assert "detail" not in res.json()
 
 
-def test_admin_paths_use_api_v1_prefix():
+def test_admin_paths_use_api_v1_prefix(db_client):
     # 관리자 경로가 /api/v1 접두어 아래에 있고, 접두어 없는 구 경로는 404인지 확인한다.
-    assert client.get("/api/v1/admin/users").status_code == 200
-    assert client.get("/admin/users").status_code == 404
+    assert db_client.get("/api/v1/admin/users").status_code == 200
+    assert db_client.get("/admin/users").status_code == 404
 
 
-def test_cors_allows_configured_origin():
+def test_cors_allows_configured_origin(db_client):
     # 허용된 프론트 오리진에는 CORS 응답 헤더가 붙는지 확인한다.
-    res = client.get("/api/v1/admin/users", headers={"Origin": "http://localhost:5173"})
+    res = db_client.get(
+        "/api/v1/admin/users", headers={"Origin": "http://localhost:5173"}
+    )
     assert res.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
-def test_cors_preflight_allows_authorization_header():
+def test_cors_preflight_allows_authorization_header(db_client):
     # 프리플라이트가 Authorization 헤더를 허용해 실연결 시 막히지 않는지 확인한다.
-    res = client.options(
+    res = db_client.options(
         "/api/v1/admin/users",
         headers={
             "Origin": "http://localhost:5173",
@@ -339,15 +488,17 @@ def test_cors_preflight_allows_authorization_header():
     assert "authorization" in allowed.lower()
 
 
-def test_cors_blocks_unconfigured_origin():
+def test_cors_blocks_unconfigured_origin(db_client):
     # 허용 목록에 없는 오리진에는 allow-origin 헤더를 주지 않는지 확인한다.
-    res = client.get("/api/v1/admin/users", headers={"Origin": "http://evil.example"})
+    res = db_client.get(
+        "/api/v1/admin/users", headers={"Origin": "http://evil.example"}
+    )
     assert "access-control-allow-origin" not in res.headers
 
 
-def test_unknown_path_uses_common_error_shape():
+def test_unknown_path_uses_common_error_shape(db_client):
     # 없는 경로(라우터 밖)의 404도 공통 오류 형식으로 나가는지 확인한다.
-    res = client.get("/api/v1/nope")
+    res = db_client.get("/api/v1/nope")
     assert res.status_code == 404
     assert res.json()["error"]["code"] == "NOT_FOUND"
 
@@ -363,9 +514,7 @@ def test_cors_config_loads_comma_separated_environment(
     from app.core.config import Settings
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-only")
-    monkeypatch.setenv(
-        "CORS_ORIGINS", "http://localhost:5173, http://127.0.0.1:5173, "
-    )
+    monkeypatch.setenv("CORS_ORIGINS", "http://localhost:5173, http://127.0.0.1:5173, ")
     settings = Settings(_env_file=None)
     assert settings.cors_origins == [
         "http://localhost:5173",
