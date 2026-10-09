@@ -204,6 +204,26 @@ def test_get_user_not_found_returns_standard_error(db_client):
     assert isinstance(error["request_id"], str) and error["request_id"]
 
 
+def test_update_role_promotes_user(db_client):
+    # user → admin 승격이 200과 변경된 역할로 오는지 확인한다.
+    res = db_client.patch("/api/v1/admin/users/2/role", json={"role": "admin"})
+    assert res.status_code == 200
+    assert res.json() == {"id": 2, "username": "user_b", "role": "admin"}
+
+
+def test_update_role_rejects_invalid_role(db_client):
+    # admin·user가 아니면 422와 공통 오류 형식으로 거절하는지 확인한다.
+    res = db_client.patch("/api/v1/admin/users/2/role", json={"role": "owner"})
+    assert res.status_code == 422
+
+
+def test_update_role_not_found(db_client):
+    # 없는 회원은 404와 공통 오류 형식으로 오는지 확인한다.
+    res = db_client.patch("/api/v1/admin/users/9999/role", json={"role": "admin"})
+    assert res.status_code == 404
+    assert res.json()["error"]["code"] == "USER_NOT_FOUND"
+
+
 def test_list_logs_filters_by_user(db_client):
     # 대화 기록이 그 회원 소유 세션으로 걸러지는지 확인한다(기록은 chat_id로 묶임).
     res = db_client.get("/api/v1/admin/logs", params={"user_id": 1})
