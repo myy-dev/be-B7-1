@@ -1,4 +1,3 @@
-# 로그인 API 구현
 import asyncio
 import os
 import subprocess
