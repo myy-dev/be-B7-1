@@ -3,6 +3,8 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import httpx2
@@ -56,20 +58,44 @@ def _message(response: Response) -> dict[str, object]:
 
 
 @pytest.mark.parametrize(
-    ("scenario", "expected_status", "expected_code"),
+    ("scenario", "expected_status", "expected_code", "max_retries"),
     [
-        ("success", 201, None),
-        ("empty", 502, "AI_UNAVAILABLE"),
-        ("incomplete", 502, "AI_UNAVAILABLE"),
-        ("timeout", 504, "AI_TIMEOUT"),
-        ("deadline", 504, "AI_TIMEOUT"),
-        ("connection", 502, "AI_UNAVAILABLE"),
-        ("malformed", 502, "AI_UNAVAILABLE"),
-        ("401", 503, "AI_CONFIGURATION_ERROR"),
-        ("403", 503, "AI_CONFIGURATION_ERROR"),
-        ("404", 503, "AI_CONFIGURATION_ERROR"),
-        ("429", 502, "AI_UNAVAILABLE"),
-        ("500", 502, "AI_UNAVAILABLE"),
+        ("success", 201, None, 0),
+        ("empty", 502, "AI_UNAVAILABLE", 0),
+        ("incomplete", 502, "AI_UNAVAILABLE", 0),
+        ("timeout", 504, "AI_TIMEOUT", 0),
+        ("deadline", 504, "AI_TIMEOUT", 0),
+        ("connection", 502, "AI_UNAVAILABLE", 0),
+        ("malformed", 502, "AI_UNAVAILABLE", 0),
+        ("401", 503, "AI_CONFIGURATION_ERROR", 0),
+        ("403", 503, "AI_CONFIGURATION_ERROR", 0),
+        ("404", 503, "AI_CONFIGURATION_ERROR", 0),
+        ("429", 502, "AI_UNAVAILABLE", 0),
+        ("500", 502, "AI_UNAVAILABLE", 0),
+        ("success", 201, None, None),
+        ("recover_500", 201, None, 4),
+        ("recover_connection", 201, None, 4),
+        ("recover_timeout", 201, None, 4),
+        ("recover_retry_after", 201, None, 4),
+        ("exhaust_408", 502, "AI_UNAVAILABLE", 4),
+        ("exhaust_409", 502, "AI_UNAVAILABLE", 4),
+        ("exhaust_429", 502, "AI_UNAVAILABLE", 4),
+        ("exhaust_500", 502, "AI_UNAVAILABLE", 4),
+        ("exhaust_503", 502, "AI_UNAVAILABLE", 4),
+        ("exhaust_connection", 502, "AI_UNAVAILABLE", 4),
+        ("exhaust_timeout", 504, "AI_TIMEOUT", 4),
+        ("400", 502, "AI_UNAVAILABLE", 4),
+        ("401", 503, "AI_CONFIGURATION_ERROR", 4),
+        ("403", 503, "AI_CONFIGURATION_ERROR", 4),
+        ("404", 503, "AI_CONFIGURATION_ERROR", 4),
+        ("422", 502, "AI_UNAVAILABLE", 4),
+        ("empty", 502, "AI_UNAVAILABLE", 4),
+        ("incomplete", 502, "AI_UNAVAILABLE", 4),
+        ("malformed", 502, "AI_UNAVAILABLE", 4),
+        ("retry_forbidden", 502, "AI_UNAVAILABLE", 4),
+        ("retry_budget", 504, "AI_TIMEOUT", 4),
+        ("retry_call_deadline", 504, "AI_TIMEOUT", 4),
+        ("retry_wait_deadline", 504, "AI_TIMEOUT", 4),
     ],
 )
 def test_app_sdk_and_database_integration(
@@ -79,6 +105,7 @@ def test_app_sdk_and_database_integration(
     scenario: str,
     expected_status: int,
     expected_code: ErrorCode | None,
+    max_retries: int | None,
 ) -> None:
     """SDK의 응답·예외가 API 응답·DB 기록·문맥·로그에 연결되는지 확인한다.
 
@@ -89,8 +116,15 @@ def test_app_sdk_and_database_integration(
         scenario: 모의 HTTP 응답 또는 네트워크 오류의 종류.
         expected_status: 질문 전송 API에 기대하는 HTTP 상태.
         expected_code: 실패 시 저장·반환해야 하는 오류 코드.
+        max_retries: 직접 재시도 횟수. None이면 설정 기본값을 검증한다.
     """
-    timeout = 0.01 if scenario == "deadline" else 30
+    timeout = (
+        0.1
+        if scenario in {"deadline", "retry_call_deadline", "retry_wait_deadline"}
+        else 30
+    )
+    if max_retries is None:
+        monkeypatch.delenv("AI_MAX_RETRIES", raising=False)
     settings = Settings(
         _env_file=None,
         openai_api_key="test-only",
@@ -98,6 +132,32 @@ def test_app_sdk_and_database_integration(
         ai_timeout_seconds=timeout,
         jwt_secret_key="test-only-chat-integration-secret-123456789",
     )
+    if max_retries is not None:
+        settings.ai_max_retries = max_retries
+    else:
+        assert settings.ai_max_retries == 4
+    if scenario == "recover_retry_after":
+        first_attempts = 2
+    elif scenario.startswith(("recover_", "exhaust_")):
+        first_attempts = 5
+    else:
+        first_attempts = 1
+    real_sleep = asyncio.sleep
+
+    async def wait(delay: float) -> None:
+        if scenario == "retry_wait_deadline":
+            await real_sleep(0.2)
+
+    sleep = AsyncMock(side_effect=wait)
+    monkeypatch.setattr(
+        "app.clients.ai.asyncio",
+        SimpleNamespace(
+            get_running_loop=asyncio.get_running_loop,
+            timeout=asyncio.timeout,
+            sleep=sleep,
+        ),
+    )
+    monkeypatch.setattr("app.clients.ai.uniform", lambda low, high: 1.0)
     monkeypatch.setattr("app.main.settings", settings)
     monkeypatch.setitem(
         app.dependency_overrides, get_current_user_id, lambda: 2**40 + 7
@@ -111,6 +171,7 @@ def test_app_sdk_and_database_integration(
     request_sessions: list[AsyncSession] = []
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'chat.db'}"
     expected_messages: list[dict[str, object]] = []
+    pending_ids: list[UUID] = []
 
     async def run() -> None:
         engine = create_async_engine(database_url)
@@ -136,17 +197,26 @@ def test_app_sdk_and_database_integration(
             payload = json.loads(request.content)
             assert not request_sessions[-1].in_transaction()
             async with sessions() as session:
-                pending = await session.scalar(
-                    select(ChatLog).where(ChatLog.status == "pending")
+                pending_rows = list(
+                    (await session.scalars(
+                        select(ChatLog).where(ChatLog.status == "pending")
+                    )).all()
                 )
-                assert pending is not None
+                assert len(pending_rows) == 1
+                pending = pending_rows[0]
+                pending_ids.append(pending.request_id)
+                assert str(pending.request_id) == caplog.records[-1].request_id
                 assert pending.question == payload["input"][-1]["content"]
                 assert pending.answer is pending.finished_at is None
-            if scenario == "timeout":
+            failure = scenario.removeprefix("recover_").removeprefix("exhaust_")
+            should_fail = not scenario.startswith("recover_") or (
+                len(sdk_requests) < first_attempts
+            )
+            if failure == "timeout" and should_fail:
                 raise httpx2.ReadTimeout("hidden SDK timeout", request=request)
-            if scenario == "deadline":
-                await asyncio.sleep(0.05)
-            if scenario == "connection":
+            if scenario in {"deadline", "retry_call_deadline"}:
+                await real_sleep(0.2)
+            if failure == "connection" and should_fail:
                 raise httpx2.ConnectError("hidden SDK connection", request=request)
             if scenario == "malformed":
                 return httpx2.Response(
@@ -154,9 +224,21 @@ def test_app_sdk_and_database_integration(
                     content=b"{",
                     headers={"content-type": "application/json"},
                 )
-            if scenario.isdigit():
+            if failure.isdigit() and should_fail:
                 return httpx2.Response(
-                    int(scenario), json={"error": {"message": "hidden SDK error"}}
+                    int(failure), json={"error": {"message": "hidden SDK error"}}
+                )
+            headers = {
+                "recover_retry_after": {"Retry-After": "1.5"},
+                "retry_forbidden": {"x-should-retry": "false"},
+                "retry_budget": {"Retry-After": "30"},
+                "retry_wait_deadline": {"Retry-After": "0.001"},
+            }
+            if scenario in headers and should_fail:
+                return httpx2.Response(
+                    500,
+                    headers=headers[scenario],
+                    json={"error": {"message": "hidden SDK error"}},
                 )
             return httpx2.Response(
                 200,
@@ -203,24 +285,28 @@ def test_app_sdk_and_database_integration(
                     path + "/messages", json={"question": "  첫 통합 질문  "}
                 )
                 assert first.status_code == expected_status
-                assert len(sdk_requests) == 1
+                assert len(sdk_requests) == first_attempts
+                assert len(set(pending_ids)) == 1
+                payloads = [json.loads(request.content) for request in sdk_requests]
+                assert all(payload == payloads[0] for payload in payloads)
                 assert len(sdk_connections) == 1
                 assert not sdk_connections[0].is_closed
                 if expected_code is None:
                     first_message = _message(first)
                     assert first_message["question"] == "첫 통합 질문"
-                    assert first_message["answer"] == "통합 답변1"
+                    assert first_message["answer"] == f"통합 답변{first_attempts}"
+                    assert first_message["request_id"] == str(pending_ids[0])
                     second = await client.post(
                         path + "/messages", json={"question": "다음 통합 질문"}
                     )
                     second_message = _message(second)
-                    assert second_message["answer"] == "통합 답변2"
+                    assert second_message["answer"] == f"통합 답변{first_attempts + 1}"
                     assert first_message["request_id"] != second_message["request_id"]
                     expected_messages.extend([first_message, second_message])
-                    second_payload = json.loads(sdk_requests[1].content)
+                    second_payload = json.loads(sdk_requests[-1].content)
                     assert second_payload["input"] == [
                         {"role": "user", "content": "첫 통합 질문"},
-                        {"role": "assistant", "content": "통합 답변1"},
+                        {"role": "assistant", "content": f"통합 답변{first_attempts}"},
                         {"role": "user", "content": "다음 통합 질문"},
                     ]
                 else:
@@ -245,6 +331,7 @@ def test_app_sdk_and_database_integration(
                     MessageResponse.model_validate(message)
                     assert message["question"] == "첫 통합 질문"
                     assert message["request_id"] == first.headers["X-Request-ID"]
+                    assert message["request_id"] == str(pending_ids[0])
                     assert message["status"] == "failed"
                     assert message["answer"] is None
                     assert message["error_code"] == expected_code
@@ -282,7 +369,7 @@ def test_app_sdk_and_database_integration(
                     )
                     assert unauthorized.status_code == 401
                     assert unauthorized.json()["error"]["code"] == "UNAUTHORIZED"
-                    assert len(sdk_requests) == 2
+                    assert len(sdk_requests) == first_attempts + 1
         assert len(sdk_connections) == 1
         assert sdk_connections[0].is_closed
 
@@ -308,7 +395,14 @@ def test_app_sdk_and_database_integration(
             await reopened.dispose()
 
     asyncio.run(run())
-    assert len(sdk_requests) == (2 if expected_code is None else 1)
+    assert len(sdk_requests) == first_attempts + (1 if expected_code is None else 0)
+    if scenario == "recover_retry_after":
+        expected_delays = [1.5]
+    elif scenario == "retry_wait_deadline":
+        expected_delays = [0.001]
+    else:
+        expected_delays = [1.0, 2.0, 4.0, 8.0][:first_attempts - 1]
+    assert [call.args[0] for call in sleep.await_args_list] == expected_delays
     assert all(connection.is_closed for connection in sdk_connections)
     for request in sdk_requests:
         payload = json.loads(request.content)
@@ -325,7 +419,8 @@ def test_app_sdk_and_database_integration(
             if record.request_id == message["request_id"]
         ]
         assert events.count("db_save_succeeded") == 2
-        assert "ai_call_started" in events
-        assert (
+        assert events.count("ai_call_started") == 1
+        outcome = (
             "ai_call_succeeded" if expected_code is None else "ai_call_failed"
-        ) in events
+        )
+        assert events.count(outcome) == 1

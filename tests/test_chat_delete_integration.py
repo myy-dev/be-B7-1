@@ -44,6 +44,7 @@ async def _delete_app(
         openai_api_key="test-only",
         openai_model="test-model",
         ai_timeout_seconds=30,
+        ai_max_retries=0,
         jwt_secret_key="test-only-chat-delete-secret-123456789",
     )
     monkeypatch.setattr("app.main.settings", settings)
