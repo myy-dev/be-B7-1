@@ -19,6 +19,9 @@ SECRET = "test-only-secret-key-for-login-tests-12345678901234567890"
 
 @pytest.fixture(autouse=True)
 def configure_auth(monkeypatch):
+    from app.api.v1.admin_deps import require_admin
+
+    monkeypatch.delitem(app.dependency_overrides, require_admin, raising=False)
     monkeypatch.setenv("JWT_SECRET_KEY", SECRET)
     monkeypatch.setenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
     get_auth_settings.cache_clear()
@@ -91,7 +94,7 @@ def test_invalid_credentials(signup_db, username, password):
         "wrong_algorithm",
     ],
 )
-def test_chat_rejects_invalid_auth(signup_db, kind):
+def test_authenticated_api_rejects_invalid_auth(signup_db, kind):
     claims = {
         "sub": "1",
         "iat": datetime.now(UTC),
@@ -145,3 +148,60 @@ def test_login_validation(signup_db, payload):
     response = TestClient(app).post("/api/v1/auth/login", json=payload)
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_INPUT"
+
+
+# 로그아웃 검증: 현재 토큰만 폐기하며 다른 로그인과 재로그인은 유지한다.
+def test_logout_revokes_only_current_token(signup_db):
+    client = TestClient(app)
+    client.post("/api/v1/auth/signup", json=PAYLOAD)
+    payload = {"username": PAYLOAD["username"], "password": PAYLOAD["password"]}
+    first = client.post("/api/v1/auth/login", json=payload).json()["access_token"]
+    second = client.post("/api/v1/auth/login", json=payload).json()["access_token"]
+    assert first != second
+    headers = {"Authorization": f"Bearer {first}"}
+    assert client.get("/api/v1/chats", headers=headers).status_code == 200
+    response = client.post("/api/v1/auth/logout", headers=headers)
+    assert response.status_code == 204
+    assert response.content == b""
+    # 새 HTTP 클라이언트도 DB에 보관된 폐기 기록을 확인한다.
+    other = TestClient(app)
+    for path in ["/api/v1/chats", "/api/v1/admin/users"]:
+        assert other.get(path, headers=headers).status_code == 401
+    assert other.post("/api/v1/auth/logout", headers=headers).status_code == 401
+    assert (
+        other.get(
+            "/api/v1/chats", headers={"Authorization": f"Bearer {second}"}
+        ).status_code
+        == 200
+    )
+    third = other.post("/api/v1/auth/login", json=payload).json()["access_token"]
+    assert third not in {first, second}
+    assert (
+        other.get(
+            "/api/v1/chats", headers={"Authorization": f"Bearer {third}"}
+        ).status_code
+        == 200
+    )
+
+    async def check_storage():
+        from hashlib import sha256
+
+        from sqlalchemy import select
+
+        from app.models.revoked_token import RevokedToken
+
+        async with signup_db() as session:
+            records = (await session.scalars(select(RevokedToken))).all()
+            assert len(records) == 1
+            assert records[0].token_hash == sha256(first.encode()).hexdigest()
+
+    asyncio.run(check_storage())
+
+
+# 로그아웃 검증: 인증되지 않은 요청은 폐기 기록을 만들지 않는다.
+@pytest.mark.parametrize("token", [None, "forged-token"])
+def test_logout_requires_authentication(signup_db, token):
+    headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+    response = TestClient(app).post("/api/v1/auth/logout", headers=headers)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"

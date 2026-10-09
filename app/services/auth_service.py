@@ -7,6 +7,7 @@ from app.repositories.user_repository import UserRepository
 from app.schemas.auth import LoginRequest, LoginResponse, SignupRequest
 
 
+# 회원가입 오류: 중복 아이디에 대해 공통 형식의 409 오류를 만든다.
 def username_taken() -> AppError:
     return AppError("USERNAME_TAKEN", "이미 사용 중인 아이디입니다.", status_code=409)
 
@@ -15,6 +16,7 @@ class AuthService:
     def __init__(self, users: UserRepository) -> None:
         self.users = users
 
+    # 회원가입 처리: 중복 검사 후 비밀번호를 해시하고 저장하며 동시 중복도 처리한다.
     async def signup(self, data: SignupRequest) -> User:
         if await self.users.get_by_username(data.username) is not None:
             raise username_taken()
@@ -28,7 +30,7 @@ class AuthService:
                 raise username_taken() from None
             raise
 
-    # 로그인 API 구현
+    # 로그인 API 구현: 회원 조회·비밀번호 검증 후 JWT를 발급하고 로그인 시각을 저장한다.
     async def login(self, data: LoginRequest) -> LoginResponse:
         user = await self.users.get_by_username(data.username)
         valid = await verify_password(

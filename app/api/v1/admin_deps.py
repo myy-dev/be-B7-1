@@ -14,9 +14,11 @@ from app.repositories.admin_db import (
     DbUserRepository,
 )
 from app.repositories.admin_system_log import SystemLogFileRepository
+from app.repositories.token_repository import TokenRepository
 from app.services.admin_service import AdminService
 
 
+# 관리자 권한 검사: JWT 인증 후 DB의 회원 권한을 확인하고 일반 회원은 403으로 거절한다.
 async def require_admin(
     db: DBSession,
     authorization: Annotated[str | None, Header()] = None,
@@ -35,6 +37,9 @@ async def require_admin(
         user_id = decode_access_token(authorization[7:])
     except (jwt.InvalidTokenError, ValueError):
         raise unauthorized from None
+    # 로그아웃 구현: 관리자 API도 폐기된 액세스 토큰의 사용을 거절한다.
+    if await TokenRepository(db).is_revoked(authorization[7:]):
+        raise unauthorized
     role = await db.scalar(select(User.role).where(User.id == user_id))
     if role is None:
         raise unauthorized

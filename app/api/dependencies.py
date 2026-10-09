@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.security import decode_access_token
 from app.models.user import User
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.token_repository import TokenRepository
 from app.services.chat_service import ChatService
 
 
@@ -30,15 +31,15 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 RequestId = Annotated[UUID, Depends(get_request_id)]
 
 
-# 로그인 API 구현
+# 로그인 API 구현: Authorization 헤더에서 Bearer 토큰을 추출한다.
 bearer = HTTPBearer(auto_error=False)
 
 
-# 로그인 API 구현
-async def get_current_user_id(
+# 회원 인증: JWT와 폐기 여부를 검증하고 DB에서 현재 회원을 반환한다.
+async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     db: DBSession,
-) -> int:
+) -> User:
     unauthorized = HTTPException(
         status_code=401,
         detail="로그인이 필요합니다.",
@@ -50,9 +51,21 @@ async def get_current_user_id(
         user_id = decode_access_token(credentials.credentials)
     except (jwt.InvalidTokenError, ValueError):
         raise unauthorized from None
-    if await db.get(User, user_id) is None:
+    # 로그아웃 구현: 폐기된 토큰은 만료 전에도 인증을 거절한다.
+    if await TokenRepository(db).is_revoked(credentials.credentials):
         raise unauthorized
-    return user_id
+    user = await db.get(User, user_id)
+    if user is None:
+        raise unauthorized
+    return user
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def get_current_user_id(user: CurrentUser) -> int:
+    """인증된 회원의 ID를 기존 API에 제공한다."""
+    return user.id
 
 
 CurrentUserId = Annotated[int, Depends(get_current_user_id)]
