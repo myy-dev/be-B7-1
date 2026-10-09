@@ -613,11 +613,71 @@ def test_question_answer_is_committed_and_reused_as_context(
     assert len(_messages(chat_api)) == 2
 
 
-@pytest.mark.parametrize("question", ["", "  ", None, 123])
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("가", "가"),
+        ("가" * 1000, "가" * 1000),
+        (" \t" + "가" * 1000 + "\n ", "가" * 1000),
+        (
+            "  " + "가" * 499 + " \n" + "나" * 499 + "  ",
+            "가" * 499 + " \n" + "나" * 499,
+        ),
+    ],
+    ids=["minimum", "maximum", "trim-before-length-check", "internal-whitespace"],
+)
+def test_valid_question_length_saves_and_sends_trimmed_content(
+    chat_api: _ChatAPI, question: str, expected: str
+) -> None:
+    """길이 검증을 통과한 질문은 앞뒤 공백 제거 후 저장하고 AI에 전달한다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    chat_id = chat_api.client.post("/api/v1/chats").json()["chat_id"]
+    response = chat_api.client.post(
+        f"/api/v1/chats/{chat_id}/messages", json={"question": question}
+    )
+    assert response.status_code == 201
+    assert response.json()["question"] == expected
+    assert response.json()["status"] == "completed"
+    ai.generate_answer.assert_awaited_once_with(expected, [])
+    messages = _messages(chat_api)
+    assert len(messages) == 1
+    assert messages[0].question == expected
+    assert messages[0].status == "completed"
+    assert chat_api.client.get(f"/api/v1/chats/{chat_id}").json()["messages"] == [
+        response.json()
+    ]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "",
+        "  ",
+        None,
+        123,
+        "가" * 1001,
+        "  " + "가" * 1001 + "\n",
+        "가" * 500 + " " + "나" * 500,
+        "가" * 500 + "\n" + "나" * 500,
+        "👩‍💻" * 334,
+    ],
+    ids=[
+        "empty",
+        "whitespace",
+        "null",
+        "wrong-type",
+        "over-maximum",
+        "over-maximum-after-trim",
+        "internal-space-counts",
+        "internal-newline-counts",
+        "combined-emoji",
+    ],
+)
 def test_invalid_question_does_not_save_or_call_ai(
     chat_api: _ChatAPI, question: object
 ) -> None:
-    """빈 질문·잘못된 타입은 저장하거나 AI에 전달하지 않는다."""
+    """빈 질문·잘못된 타입·길이 초과는 저장하거나 AI에 전달하지 않는다."""
     chat_api.authenticate()
     ai = _mock_ai(chat_api)
     chat_id = chat_api.client.post("/api/v1/chats").json()["chat_id"]
