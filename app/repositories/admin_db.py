@@ -26,6 +26,7 @@ def _user_dict(user: User) -> dict:
         "id": user.id,
         "username": user.username,
         "name": user.name,
+        "role": user.role,
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
     }
