@@ -1,5 +1,3 @@
-"""HTTP 요청마다 UUID4 식별자와 처리 이벤트를 생성한다."""
-
 from time import perf_counter
 from uuid import uuid4
 

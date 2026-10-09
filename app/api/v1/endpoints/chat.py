@@ -21,7 +21,6 @@ from app.schemas.chat import (
     MessageResponse,
 )
 
-# 로그인 API 구현
 router = APIRouter(
     prefix="/chats",
     tags=["chats"],

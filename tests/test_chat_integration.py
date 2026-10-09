@@ -96,6 +96,7 @@ def test_app_sdk_and_database_integration(
         openai_api_key="test-only",
         openai_model="test-model",
         ai_timeout_seconds=timeout,
+        jwt_secret_key="test-only-chat-integration-secret-123456789",
     )
     monkeypatch.setattr("app.main.settings", settings)
     monkeypatch.setitem(

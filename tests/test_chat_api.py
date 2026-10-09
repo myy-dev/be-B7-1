@@ -150,10 +150,10 @@ def test_login_rejects_spoofed_identity(
     chat_api: _ChatAPI, method: str, path: str, status_code: int, monkeypatch
 ) -> None:
     """임의 사용자 ID와 위조 토큰으로 인증을 우회할 수 없다."""
-    from app.core.config import get_auth_settings
+    from app.core.config import get_settings
 
     monkeypatch.setenv("JWT_SECRET_KEY", "test-only-secret-for-chat-tests-123456789")
-    get_auth_settings.cache_clear()
+    get_settings.cache_clear()
     response = chat_api.client.request(
         method,
         path,
@@ -167,7 +167,7 @@ def test_login_rejects_spoofed_identity(
     )
     _assert_error(response, 401, "UNAUTHORIZED")
     assert chat_api.stored_chats() == []
-    get_auth_settings.cache_clear()
+    get_settings.cache_clear()
 
 
 def test_create_persists_authenticated_owner(chat_api: _ChatAPI) -> None:
@@ -418,25 +418,29 @@ def test_create_failure_rolls_back_session(chat_api: _ChatAPI) -> None:
     assert chats[0].user_id == chat_api.user_id
 
 
-def test_fresh_startup_registers_models_and_enforces_foreign_keys() -> None:
+def test_fresh_startup_registers_models_and_enforces_foreign_keys(tmp_path: Path) -> None:
     """새 프로세스의 앱 DB 시작 처리가 모델 등록과 외래키 설정을 수행한다."""
     script = """
 import asyncio
+import sys
 from unittest.mock import patch
 
 import sqlalchemy.ext.asyncio as sa_async
 from sqlalchemy import inspect, text
 
-test_engine = sa_async.create_async_engine("sqlite+aiosqlite://")
-with patch.object(sa_async, "create_async_engine", return_value=test_engine):
-    from app.core.database import Base, engine
-
-assert engine is test_engine
-assert not Base.metadata.tables
+sys.path.insert(0, REPO_PATH)
 from app.core.config import Settings
-with patch("app.core.config.get_settings", return_value=Settings(
-    _env_file=None, openai_api_key="test-only"
-)):
+settings = Settings(
+    _env_file=None,
+    openai_api_key="test-only",
+    jwt_secret_key="test-only-startup-secret-at-least-32-characters",
+)
+test_engine = sa_async.create_async_engine("sqlite+aiosqlite://")
+with patch("app.core.config.get_settings", return_value=settings):
+    with patch.object(sa_async, "create_async_engine", return_value=test_engine):
+        from app.core.database import Base, engine
+    assert engine is test_engine
+    assert not Base.metadata.tables
     from app.main import app, lifespan
 
 async def verify_startup():
@@ -458,9 +462,10 @@ async def verify_startup():
 
 asyncio.run(verify_startup())
 """
+    script = script.replace("REPO_PATH", repr(str(Path(__file__).resolve().parents[1])))
     result = subprocess.run(
         [sys.executable, "-c", script],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=tmp_path,
         capture_output=True,
         text=True,
         timeout=15,

@@ -126,7 +126,12 @@ def test_sdk_request_response_and_error_mapping(
 def test_invalid_configuration_rejected(key: str, model: str, field: str) -> None:
     """AI 필수 설정의 빈 값은 서버 시작에 사용하는 설정 생성 시 거절한다."""
     with pytest.raises(ValidationError) as caught:
-        Settings(_env_file=None, openai_api_key=key, openai_model=model)
+        Settings(
+            _env_file=None,
+            openai_api_key=key,
+            openai_model=model,
+            jwt_secret_key="test-only-ai-client-secret-123456789",
+        )
     assert caught.value.errors()[0]["loc"] == (field,)
 
 
@@ -138,7 +143,10 @@ def test_lifespan_reuses_client_and_cleans_up(
 ) -> None:
     """요청 간 재사용과 생성·실행·종료 오류에서도 자원 정리를 검증한다."""
     settings = Settings(
-        _env_file=None, openai_api_key="test-only", openai_model="test-model"
+        _env_file=None,
+        openai_api_key="test-only",
+        openai_model="test-model",
+        jwt_secret_key="test-only-ai-client-secret-123456789",
     )
     monkeypatch.setattr(main, "settings", settings)
     monkeypatch.setattr(main, "create_db_and_tables", AsyncMock())

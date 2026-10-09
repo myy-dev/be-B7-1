@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.revoked_token import RevokedToken
 
 
-# 로그아웃 구현: 토큰 원문을 저장하지 않고 폐기 여부를 조회·저장한다.
 class TokenRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

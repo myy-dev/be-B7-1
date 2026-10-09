@@ -3,11 +3,9 @@ from uuid import uuid4
 
 import jwt
 from pwdlib import PasswordHash
-from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from app.core.config import AuthSettings, get_auth_settings
-from app.core.errors import AppError
+from app.core.config import get_settings
 
 password_hash = PasswordHash.recommended()
 # 존재하지 않는 계정도 비밀번호 해시를 검증한다.
@@ -28,19 +26,9 @@ async def verify_password(password: str, hashed: str | None) -> bool:
     return hashed is not None and valid
 
 
-# 로그인 API 구현: JWT 설정을 읽고 잘못된 설정은 공통 503 오류로 변환한다.
-def auth_settings() -> AuthSettings:
-    try:
-        return get_auth_settings()
-    except ValidationError:
-        raise AppError(
-            "AUTH_CONFIGURATION_ERROR", "인증 서비스 설정을 확인해야 합니다.", 503
-        ) from None
-
-
 # 로그인 API 구현: 회원 ID·발급 시각·만료 시각을 담은 HS256 JWT를 발급한다.
 def create_access_token(user_id: int) -> tuple[str, int]:
-    settings = auth_settings()
+    settings = get_settings()
     now = datetime.now(UTC)
     expires_in = settings.access_token_expire_minutes * 60
     token = jwt.encode(
@@ -58,7 +46,7 @@ def create_access_token(user_id: int) -> tuple[str, int]:
 
 # 로그인 API 구현: JWT 서명·만료·필수 클레임을 검증하고 유효한 회원 ID를 꺼낸다.
 def decode_access_token_claims(token: str) -> dict:
-    settings = auth_settings()
+    settings = get_settings()
     claims = jwt.decode(
         token,
         settings.jwt_secret_key,
