@@ -3,6 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from app.core.datetimes import UtcDateTime
 
 
+# 회원가입 입력 검증: 아이디·비밀번호·이름의 규칙을 검사하고 추가 필드를 거절한다.
 class SignupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -21,6 +22,7 @@ class SignupRequest(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+# 회원가입 응답: 비밀번호와 해시를 제외한 회원 정보만 반환한다.
 class SignupResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -30,7 +32,7 @@ class SignupResponse(BaseModel):
     created_at: UtcDateTime
 
 
-# 로그인 API 구현
+# 로그인 API 구현: 아이디·비밀번호를 검증하고 아이디를 소문자로 통일한다.
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -43,7 +45,7 @@ class LoginRequest(BaseModel):
         return value.lower()
 
 
-# 로그인 API 구현
+# 로그인 API 구현: access token, 토큰 타입과 만료 시간(초)을 반환한다.
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

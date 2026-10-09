@@ -371,9 +371,7 @@ def test_missing_and_unowned_chats_share_404(
 
 
 @pytest.mark.parametrize("method", ["GET", "DELETE"])
-def test_invalid_chat_uuid_returns_input_error(
-    chat_api: _ChatAPI, method: str
-) -> None:
+def test_invalid_chat_uuid_returns_input_error(chat_api: _ChatAPI, method: str) -> None:
     """잘못된 UUID 경로는 공통 입력 오류로 반환한다."""
     chat_api.authenticate()
     response = chat_api.client.request(method, "/api/v1/chats/not-a-uuid")
@@ -447,7 +445,7 @@ async def verify_startup():
             tables = await connection.run_sync(
                 lambda sync_connection: inspect(sync_connection).get_table_names()
             )
-            assert set(tables) == {"users", "chats", "chat_logs"}
+            assert set(tables) == {"users", "chats", "chat_logs", "revoked_tokens"}
             assert await connection.scalar(text("PRAGMA foreign_keys")) == 1
             keys = await connection.run_sync(
                 lambda sync_connection: inspect(sync_connection).get_foreign_keys(

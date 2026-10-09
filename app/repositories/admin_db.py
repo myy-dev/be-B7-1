@@ -45,12 +45,14 @@ def _log_dict(log: ChatLog) -> dict:
     }
 
 
+# 관리자 회원 조회: 실제 users 테이블에서 회원 목록과 상세 정보를 조회한다.
 class DbUserRepository(UserRepository):
     """`users` 테이블에서 비밀번호·해시 없이 공개 필드만 읽는다."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    # 관리자 회원 목록: 전체 회원 수와 페이지에 해당하는 공개 회원 정보를 조회한다.
     async def list_users(self, page: int, size: int) -> tuple[list[dict], int]:
         total = await self.session.scalar(select(func.count(User.id))) or 0
         begin = max(page - 1, 0) * max(size, 1)
@@ -59,6 +61,7 @@ class DbUserRepository(UserRepository):
         )
         return [_user_dict(u) for u in rows.all()], total
 
+    # 관리자 회원 상세: 회원 ID로 조회하고 비밀번호·해시를 제외한 정보를 반환한다.
     async def get_user(self, user_id: int) -> dict | None:
         user = await self.session.scalar(select(User).where(User.id == user_id))
         return _user_dict(user) if user is not None else None

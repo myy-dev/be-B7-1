@@ -56,7 +56,7 @@ def get_settings() -> Settings:
     return Settings()  # pyright: ignore[reportCallIssue]
 
 
-# 로그인 API 구현
+# 로그인 API 구현: JWT 서명 키와 토큰 유효 시간의 환경 설정을 검증한다.
 class AuthSettings(BaseSettings):
     jwt_secret_key: str = Field(min_length=32)
     access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
@@ -66,7 +66,7 @@ class AuthSettings(BaseSettings):
     )
 
 
-# 로그인 API 구현
+# 로그인 API 구현: 검증된 JWT 설정을 캐시해 재사용한다.
 @lru_cache
 def get_auth_settings() -> AuthSettings:
     return AuthSettings()
