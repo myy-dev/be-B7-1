@@ -1,11 +1,15 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+BASE_DIR = Path(__file__).resolve().parents[2]
+
 
 class Settings(BaseSettings):
+    database_url: str = f"sqlite+aiosqlite:///{BASE_DIR / 'app.db'}"
     openai_api_key: str
     openai_model: str = "gpt-6-luna"
     ai_timeout_seconds: float = Field(default=30, gt=0, allow_inf_nan=False)
