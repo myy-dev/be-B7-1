@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.core.config import AuthSettings, Settings
+from app.core.config import Settings
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
 from app.core.security import create_access_token
 from app.main import app, lifespan
@@ -44,12 +44,10 @@ async def _delete_app(
         openai_api_key="test-only",
         openai_model="test-model",
         ai_timeout_seconds=30,
-    )
-    auth_settings = AuthSettings(
-        _env_file=None, jwt_secret_key="test-only-chat-delete-secret-123456789"
+        jwt_secret_key="test-only-chat-delete-secret-123456789",
     )
     monkeypatch.setattr("app.main.settings", settings)
-    monkeypatch.setattr("app.core.security.get_auth_settings", lambda: auth_settings)
+    monkeypatch.setattr("app.core.security.get_settings", lambda: settings)
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'delete.db'}"
     engine = create_async_engine(database_url)
     event.listen(engine.sync_engine, "connect", _enable_sqlite_foreign_keys)

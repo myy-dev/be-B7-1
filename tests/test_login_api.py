@@ -1,12 +1,17 @@
 # 로그인 API 구현
 import asyncio
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import jwt
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
-from app.core.config import get_auth_settings
+from app.core.config import Settings, get_settings
 from app.main import app
 from app.models.user import User
 from tests.test_auth_api import PAYLOAD
@@ -24,9 +29,9 @@ def configure_auth(monkeypatch):
     monkeypatch.delitem(app.dependency_overrides, require_admin, raising=False)
     monkeypatch.setenv("JWT_SECRET_KEY", SECRET)
     monkeypatch.setenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
-    get_auth_settings.cache_clear()
+    get_settings.cache_clear()
     yield
-    get_auth_settings.cache_clear()
+    get_settings.cache_clear()
 
 
 def test_login_and_authenticated_chat(signup_db):
@@ -122,17 +127,52 @@ def test_authenticated_api_rejects_invalid_auth(signup_db, kind):
     assert response.headers["www-authenticate"] == "Bearer"
 
 
-def test_bad_secret_returns_configuration_error(signup_db, monkeypatch):
-    client = TestClient(app)
-    client.post("/api/v1/auth/signup", json=PAYLOAD)
-    monkeypatch.setenv("JWT_SECRET_KEY", "short")
-    get_auth_settings.cache_clear()
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"username": PAYLOAD["username"], "password": PAYLOAD["password"]},
+@pytest.mark.parametrize(
+    ("secret", "minutes", "field"),
+    [
+        (None, "30", "jwt_secret_key"),
+        ("", "30", "jwt_secret_key"),
+        ("short", "30", "jwt_secret_key"),
+        (SECRET, "0", "access_token_expire_minutes"),
+        (SECRET, "1441", "access_token_expire_minutes"),
+        (SECRET, "invalid", "access_token_expire_minutes"),
+    ],
+)
+def test_invalid_auth_configuration_prevents_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    secret: str | None,
+    minutes: str,
+    field: str,
+) -> None:
+    """잘못된 JWT 설정은 설정 생성과 새 프로세스의 앱 초기화를 막는다."""
+    if secret is None:
+        monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    else:
+        monkeypatch.setenv("JWT_SECRET_KEY", secret)
+    monkeypatch.setenv("ACCESS_TOKEN_EXPIRE_MINUTES", minutes)
+    with pytest.raises(ValidationError) as caught:
+        Settings(_env_file=None, openai_api_key="test-only")
+    assert field in {error["loc"][0] for error in caught.value.errors()}
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    env["OPENAI_API_KEY"] = "test-only"
+    env["OPENAI_MODEL"] = "test-model"
+    env["DATABASE_URL"] = f"sqlite+aiosqlite:///{tmp_path / 'startup.db'}"
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
     )
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "AUTH_CONFIGURATION_ERROR"
+    assert result.returncode != 0
+    assert "ValidationError" in result.stderr
+    assert field in result.stderr
+    assert not (tmp_path / "startup.db").exists()
 
 
 @pytest.mark.parametrize(

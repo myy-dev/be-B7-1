@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     openai_api_key: str
     openai_model: str = "gpt-6-luna"
     ai_timeout_seconds: float = Field(default=30, gt=0, allow_inf_nan=False)
+    jwt_secret_key: str = Field(min_length=32)
+    access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
     # 시스템 이벤트 로그(JSONL) 위치. 배포에서는 한 파일에 쌓이게 맞춘다.
     system_log_path: str = "logs/system.jsonl"
     # CORS_ORIGINS 환경변수는 쉼표로 구분한다: CORS_ORIGINS=http://a,http://b
@@ -58,19 +60,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # pyright: ignore[reportCallIssue]
-
-
-# 로그인 API 구현: JWT 서명 키와 토큰 유효 시간의 환경 설정을 검증한다.
-class AuthSettings(BaseSettings):
-    jwt_secret_key: str = Field(min_length=32)
-    access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
-
-    model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
-    )
-
-
-# 로그인 API 구현: 검증된 JWT 설정을 캐시해 재사용한다.
-@lru_cache
-def get_auth_settings() -> AuthSettings:
-    return AuthSettings()
