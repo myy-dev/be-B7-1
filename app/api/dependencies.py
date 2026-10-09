@@ -1,19 +1,13 @@
-"""여러 라우터에서 재사용하는 요청·DB 의존성을 정의한다."""
-
-from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID
 
 import jwt
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.ai import AIClient
-from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.errors import APIError
 from app.core.security import decode_access_token
 from app.models.user import User
 from app.repositories.chat_repository import ChatRepository
@@ -84,31 +78,9 @@ def get_chat_service(
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
 
 
-async def get_ai_client(user_id: CurrentUserId) -> AsyncGenerator[AIClient, None]:
-    """인증 후 AI 설정을 확인하고 요청이 끝나면 HTTP 연결을 정리한다.
-
-    Args:
-        user_id: 인증 검사를 마친 사용자 ID.
-
-    Yields:
-        자동 재시도하지 않는 요청별 AI 클라이언트.
-
-    Raises:
-        APIError: 서버의 AI 설정이 없거나 유효하지 않은 경우.
-    """
-    try:
-        settings = get_settings()
-    except ValidationError as exc:
-        raise APIError("AI_CONFIGURATION_ERROR") from exc
-    if not settings.openai_api_key.strip() or not settings.openai_model.strip():
-        raise APIError("AI_CONFIGURATION_ERROR")
-    client = AIClient(
-        settings.openai_api_key, settings.openai_model, settings.ai_timeout_seconds
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
+def get_ai_client(request: Request) -> AIClient:
+    """앱 시작 시 생성한 공용 AI 클라이언트를 반환한다."""
+    return request.app.state.ai_client
 
 
 AIClientDep = Annotated[AIClient, Depends(get_ai_client)]

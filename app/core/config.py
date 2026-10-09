@@ -21,6 +21,14 @@ class Settings(BaseSettings):
         "https://b7-1-two.vercel.app",
     ]
 
+    @field_validator("openai_api_key", "openai_model")
+    @classmethod
+    def _validate_ai_setting(cls, value: str) -> str:
+        """AI 필수 설정이 비어 있는지 검증한다."""
+        if not value.strip():
+            raise ValueError("AI 필수 설정은 비어 있을 수 없습니다.")
+        return value
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors_origins(cls, value: object) -> object:

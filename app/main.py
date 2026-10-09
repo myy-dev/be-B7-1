@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router, health_router
+from app.clients.ai import AIClient
 from app.core.config import get_settings
 from app.core.database import create_db_and_tables, engine
 from app.core.errors import configure_request_processing
@@ -11,9 +12,18 @@ from app.core.errors import configure_request_processing
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await create_db_and_tables()
     try:
-        yield
+        await create_db_and_tables()
+        client = AIClient(
+            settings.openai_api_key,
+            settings.openai_model,
+            settings.ai_timeout_seconds,
+        )
+        app.state.ai_client = client
+        try:
+            yield
+        finally:
+            await client.close()
     finally:
         await engine.dispose()
 

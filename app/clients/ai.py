@@ -83,5 +83,5 @@ class AIClient:
         return answer
 
     async def close(self) -> None:
-        """요청이 끝나면 SDK의 비동기 HTTP 연결을 정리한다."""
+        """앱이 종료되면 SDK의 비동기 HTTP 연결을 정리한다."""
         await self._client.close()

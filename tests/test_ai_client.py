@@ -6,8 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx2
 import pytest
+from fastapi import FastAPI, Request
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
+import app.main as main
 from app.api.dependencies import get_ai_client
 from app.clients.ai import AIClient
 from app.core.config import Settings
@@ -111,39 +114,66 @@ def test_sdk_request_response_and_error_mapping(
     ]
 
 
-@pytest.mark.parametrize(("key", "model"), [("", "test-model"), ("test-only", " ")])
-def test_invalid_configuration_rejected_without_client(
-    monkeypatch: pytest.MonkeyPatch, key: str, model: str
+@pytest.mark.parametrize(
+    ("key", "model", "field"),
+    [
+        ("", "test-model", "openai_api_key"),
+        (" \t\n", "test-model", "openai_api_key"),
+        ("test-only", "", "openai_model"),
+        ("test-only", " \t\n", "openai_model"),
+    ],
+)
+def test_invalid_configuration_rejected(key: str, model: str, field: str) -> None:
+    """AI 필수 설정의 빈 값은 서버 시작에 사용하는 설정 생성 시 거절한다."""
+    with pytest.raises(ValidationError) as caught:
+        Settings(_env_file=None, openai_api_key=key, openai_model=model)
+    assert caught.value.errors()[0]["loc"] == (field,)
+
+
+@pytest.mark.parametrize(
+    "scenario", ["success", "create_error", "body_error", "close_error"]
+)
+def test_lifespan_reuses_client_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch, scenario: str
 ) -> None:
-    """비어 있는 AI 설정은 SDK 생성 전에 고정 설정 오류로 반환한다."""
-    settings = Settings(_env_file=None, openai_api_key=key, openai_model=model)
-    monkeypatch.setattr("app.api.dependencies.get_settings", lambda: settings)
-    constructor = MagicMock()
-    monkeypatch.setattr("app.api.dependencies.AIClient", constructor)
-
-    async def run() -> None:
-        with pytest.raises(APIError) as caught:
-            await anext(get_ai_client(1))
-        assert caught.value.code == "AI_CONFIGURATION_ERROR"
-
-    asyncio.run(run())
-    constructor.assert_not_called()
-
-
-def test_dependency_closes_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    """요청 의존성이 종료되면 SDK HTTP 자원을 정리한다."""
+    """요청 간 재사용과 생성·실행·종료 오류에서도 자원 정리를 검증한다."""
     settings = Settings(
         _env_file=None, openai_api_key="test-only", openai_model="test-model"
     )
-    monkeypatch.setattr("app.api.dependencies.get_settings", lambda: settings)
+    monkeypatch.setattr(main, "settings", settings)
+    monkeypatch.setattr(main, "create_db_and_tables", AsyncMock())
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    monkeypatch.setattr(main, "engine", engine)
     client = MagicMock(spec=AIClient)
     client.close = AsyncMock()
-    monkeypatch.setattr("app.api.dependencies.AIClient", lambda *args: client)
+    failure = RuntimeError("lifecycle failure")
+    constructor = MagicMock(return_value=client)
+    if scenario == "create_error":
+        constructor.side_effect = failure
+    elif scenario == "close_error":
+        client.close.side_effect = failure
+    monkeypatch.setattr(main, "AIClient", constructor)
+    app = FastAPI(lifespan=main.lifespan)
 
     async def run() -> None:
-        dependency = get_ai_client(1)
-        assert await anext(dependency) is client
-        await dependency.aclose()
+        async with main.lifespan(app):
+            first = Request({"type": "http", "app": app})
+            second = Request({"type": "http", "app": app})
+            assert get_ai_client(first) is get_ai_client(second) is client
+            client.close.assert_not_awaited()
+            if scenario == "body_error":
+                raise failure
 
-    asyncio.run(run())
-    client.close.assert_awaited_once()
+    if scenario == "success":
+        asyncio.run(run())
+    else:
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(run())
+        assert caught.value is failure
+    constructor.assert_called_once_with("test-only", "test-model", 30)
+    engine.dispose.assert_awaited_once()
+    if scenario == "create_error":
+        client.close.assert_not_awaited()
+    else:
+        client.close.assert_awaited_once()
