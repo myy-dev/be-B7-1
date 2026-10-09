@@ -67,19 +67,14 @@ uv sync --locked
 
 ## 4. 환경변수 설정
 
-프로젝트 루트에 `.env` 파일을 만들고 실제 키를 입력합니다.
+프로젝트 루트에서 예시 파일을 복사합니다.
 
-```dotenv
-OPENAI_API_KEY=발급받은_API_키
-OPENAI_MODEL=GPT 모델
-AI_TIMEOUT_SECONDS=30
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,https://www.quackquack-e.duckdns.org,https://b7-1-two.vercel.app
+```bash
+cp .env.example .env
+openssl rand -hex 32
 ```
 
-- OpenAI 기능 사용 시 필요하며, 현재 서버 실행 확인에는 키가 없어도 됩니다.
-- 모델을 바꾸려면 `OPENAI_MODEL=사용할_모델_ID`를 추가합니다.
-- `CORS_ORIGINS`는 브라우저가 허용할 프론트엔드 주소입니다. 쉼표로 여러 개를 적습니다. 기본값은 개발 서버(`http://localhost:5173`, `http://127.0.0.1:5173`)와 실제 배포 주소(`https://www.quackquack-e.duckdns.org`, `https://b7-1-two.vercel.app`)입니다.
-- `.env`는 커밋하지 않습니다.
+`.env`의 `OPENAI_API_KEY`에 실제 키를, `JWT_SECRET_KEY`에 생성한 값을 입력합니다. `OPENAI_MODEL`은 사용할 모델 ID를 지정합니다. AI 키와 모델은 빈 값이 허용되지 않으며 JWT 키는 최소 32자입니다. `CORS_ORIGINS`는 쉼표로 구분한 프론트 주소입니다. 전체 환경 변수와 배포 설정은 [운영 안내](OPERATIONS.md)를 참고합니다. `.env`는 커밋하지 않습니다.
 
 ## 5. 서버 실행
 
@@ -101,7 +96,7 @@ SQLite는 별도 설치 없이 `app.db` 파일을 사용합니다.
 - 채팅방 생성·목록·상세 조회와 `POST /api/v1/chats/{chat_id}/messages`를 제공합니다.
 - 질문 전송 본문은 `{"question": "질문 내용"}`이며, 성공하면 저장된 질문·답변을 `201` 일반 JSON으로 반환합니다. 최근 완료 대화 5개를 다음 질문의 문맥에 사용합니다.
 - `OPENAI_API_KEY`와 사용할 `OPENAI_MODEL`을 설정합니다. `AI_TIMEOUT_SECONDS`의 기본값은 30초이며 자동 재시도하지 않습니다.
-- 실제 사용자 인증은 아직 미연결이므로 채팅 API는 현재 `401`을 반환합니다. 대화 흐름은 테스트에서 인증·AI 의존성을 교체하여 검증합니다.
+- 회원가입·로그인 후 발급된 JWT를 `Authorization: Bearer <token>`으로 전달합니다. 토큰 없는 채팅 요청은 `401`입니다. 요청 예시는 [API 안내](API.md)를 참고합니다.
 
 ## 자주 쓰는 uv 명령어
 

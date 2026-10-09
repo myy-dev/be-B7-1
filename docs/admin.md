@@ -21,7 +21,7 @@
 
 ```
 app/api/v1/admin.py              라우터
-app/api/v1/admin_deps.py         의존성(인증 자리, 저장소 연결)
+app/api/v1/admin_deps.py         의존성(JWT·관리자 권한 검사, 저장소 연결)
 app/services/admin_service.py    조회 로직
 app/schemas/admin.py             응답 형식
 app/repositories/admin_repositories.py  저장소 인터페이스
@@ -38,14 +38,14 @@ tests/test_admin_api.py          테스트
 | 시스템 로그 조회 | 구현 (이벤트·레벨·기간 필터, 최신순) |
 | 회원 조회 | 구현 (`users` 실제 조회) |
 | 대화 기록·세션 조회 | 구현 (`chats`·`chat_logs` 실제 조회) |
-| 관리자 인증 | 통과 (회원 담당 JWT 대기) |
+| 관리자 인증 | 구현 (JWT 검증, 폐기 토큰 거절, DB role 확인) |
 | 오류 응답 | 구현 (`code`·`message`·`request_id`) |
 
 - 회원·대화 기록·세션은 `admin_db.py`에서 실제 DB(`users`·`chats`·`chat_logs`)를 읽는다. 세션 `title`은 DB에 컬럼이 없어 첫 질문으로 채운다.
 
-- 관리자 인증은 회원 담당이 JWT를 정하기 전까지 검사 없이 통과시킨다(`admin_deps.py`의 `require_admin`).
+- 관리자 인증은 `admin_deps.py`의 `require_admin`에서 JWT·토큰 폐기 여부를 확인하고 DB의 `role=admin`만 허용한다. 인증 실패는 401, 일반 회원은 403이다.
 - 시스템 로그는 백엔드 각자 JSONL 파일로 남기고, 조회는 여기서 맡는다. `event`, `level`, `start`, `end`로 걸러 최신순으로 준다. 형식은 조회를 맡은 어드민이 제시했고 [system-logs.md](system-logs.md)에 있다.
-- 저장소와 인증은 스키마·JWT가 나오면 바꿀 자리를 코드에 `TODO(담당)`로 표시해 두었다.
+- 공통 요청·응답과 오류 코드는 [API 안내](API.md), 운영 검증은 [운영 안내](OPERATIONS.md)를 참고한다.
 
 ## 환경 변수
 
