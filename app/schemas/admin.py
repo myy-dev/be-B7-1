@@ -6,7 +6,17 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class RoleUpdateRequest(BaseModel):
+    role: str = Field(min_length=1, max_length=20)
+
+
+class RoleUpdateResponse(BaseModel):
+    id: int
+    username: str
+    role: str
 
 
 class UserSummary(BaseModel):

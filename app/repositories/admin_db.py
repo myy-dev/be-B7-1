@@ -66,6 +66,18 @@ class DbUserRepository(UserRepository):
         user = await self.session.scalar(select(User).where(User.id == user_id))
         return _user_dict(user) if user is not None else None
 
+    async def update_role(self, user_id: int, role: str) -> dict | None:
+        user = await self.session.scalar(select(User).where(User.id == user_id))
+        if user is None:
+            return None
+        user.role = role
+        try:
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
+        return {"id": user.id, "username": user.username, "role": user.role}
+
 
 class DbChatLogRepository(ChatLogRepository):
     """`chat_logs`에서 회원·기간 조건으로 대화 기록을 읽는다.
