@@ -20,7 +20,7 @@ from app.schemas.error import ErrorResponse
 
 
 def _response_examples() -> list[tuple[type[BaseModel], dict[str, object]]]:
-    api_path = Path(__file__).resolve().parents[1] / "docs/PRD/AI-CHAT-API.md"
+    api_path = Path(__file__).resolve().parents[1] / "docs/PRD/chat-spec.md"
     examples = re.findall(r"```json\n(.*?)\n```", api_path.read_text(), re.S)
     responses: list[tuple[type[BaseModel], dict[str, object]]] = []
     for example in examples:
