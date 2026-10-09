@@ -21,6 +21,49 @@ signup_db = _signup_db
 SECRET = "test-only-secret-key-for-login-tests-12345678901234567890"
 
 
+def test_member_events_distinguish_outcomes(signup_db, monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "app.services.auth_service.log_event",
+        lambda event, **fields: events.append((event, fields)),
+    )
+    client = TestClient(app)
+    signup = client.post("/api/v1/auth/signup", json=PAYLOAD)
+    assert signup.status_code == 201
+    user_id = str(signup.json()["id"])
+    assert events == [
+        ("user_signed_up", {"user_id": user_id, "result": "success"})
+    ]
+    assert client.post("/api/v1/auth/signup", json=PAYLOAD).status_code == 409
+    assert len(events) == 1
+
+    for username in (PAYLOAD["username"], "missing_user"):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "wrong-password"},
+        )
+        assert response.status_code == 401
+        assert events[-1] == (
+            "user_login_failed",
+            {
+                "user_id": user_id if username == PAYLOAD["username"] else None,
+                "result": "failure",
+                "error_code": "INVALID_CREDENTIALS",
+                "http_status": 401,
+            },
+        )
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": PAYLOAD["username"], "password": PAYLOAD["password"]},
+    )
+    assert response.status_code == 200
+    assert events[-1] == (
+        "user_logged_in", {"user_id": user_id, "result": "success"}
+    )
+    assert len(events) == 4
+
+
 @pytest.fixture(autouse=True)
 def configure_auth(monkeypatch):
     from app.api.v1.admin_deps import require_admin
