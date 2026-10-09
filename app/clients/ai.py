@@ -1,5 +1,3 @@
-"""OpenAI에서 완성된 일반 텍스트 답변을 가져온다."""
-
 import asyncio
 import json
 

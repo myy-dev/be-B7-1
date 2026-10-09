@@ -27,16 +27,16 @@ async def _admin_override() -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _clear_auth_settings_cache(monkeypatch):
-    # AuthSettings가 lru_cache라 테스트 키가 실제 환경 키에 가려지지 않게 비운다.
-    from app.core.config import get_auth_settings
+def _clear_settings_cache(monkeypatch):
+    # Settings가 lru_cache라 테스트 키가 실제 환경 키에 가려지지 않게 비운다.
+    from app.core.config import get_settings
 
     monkeypatch.setenv(
         "JWT_SECRET_KEY", "test-only-secret-key-for-admin-tests-1234567890"
     )
-    get_auth_settings.cache_clear()
+    get_settings.cache_clear()
     yield
-    get_auth_settings.cache_clear()
+    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -514,6 +514,7 @@ def test_cors_config_loads_comma_separated_environment(
     from app.core.config import Settings
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-only-cors-secret-at-least-32-characters")
     monkeypatch.setenv("CORS_ORIGINS", "http://localhost:5173, http://127.0.0.1:5173, ")
     settings = Settings(_env_file=None)
     assert settings.cors_origins == [

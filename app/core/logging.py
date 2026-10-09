@@ -1,5 +1,3 @@
-"""원문이나 인증 정보를 포함하지 않는 요청·처리 이벤트 로그를 제공한다."""
-
 import json
 import logging
 from datetime import UTC, datetime
@@ -82,7 +80,7 @@ def configure_logging(log_path: str | None = None) -> None:
                     handler.close()
             path.parent.mkdir(parents=True, exist_ok=True)
             file_handler = logging.FileHandler(path, encoding="utf-8")
-            setattr(file_handler, "_app_log_path", resolved_path)
+            file_handler._app_log_path = resolved_path
             file_handler.setFormatter(EventLogFormatter())
             logger.addHandler(file_handler)
     logger.setLevel(logging.INFO)
