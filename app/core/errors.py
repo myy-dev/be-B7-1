@@ -121,9 +121,7 @@ async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-async def http_error_handler(
-    request: Request, exc: HTTPException
-) -> JSONResponse:
+async def http_error_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """경로·메서드 등 일반 HTTP 오류를 공통 형식으로 반환한다.
 
     Args:
@@ -260,14 +258,16 @@ async def handle_http_error(request: Request, exc: Exception) -> Response:
     if not isinstance(exc, HTTPException):
         raise exc
     code: ErrorCode
-    if exc.status_code == 401:
-        code = "UNAUTHORIZED"
-    elif exc.status_code == 403:
-        code = "FORBIDDEN"
-    elif exc.status_code == 422:
-        code = "INVALID_INPUT"
-    else:
-        return await http_error_handler(request, exc)
+
+    match exc.status_code:
+        case 401:
+            code = "UNAUTHORIZED"
+        case 403:
+            code = "FORBIDDEN"
+        case 422:
+            code = "INVALID_INPUT"
+        case _:
+            return await http_error_handler(request, exc)
     return _error_response(
         request, code, exception_type=type(exc).__name__, headers=exc.headers
     )
@@ -287,9 +287,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(HTTPException, handle_http_error)
 
 
-def configure_request_processing(
-    app: FastAPI, log_path: str | None = None
-) -> None:
+def configure_request_processing(app: FastAPI, log_path: str | None = None) -> None:
     """요청 미들웨어·이벤트 로그·공통 오류 핸들러를 등록한다.
 
     Args:
