@@ -23,6 +23,7 @@ class UserSummary(BaseModel):
     id: int
     username: str
     name: str
+    role: str
     created_at: datetime
 
 
