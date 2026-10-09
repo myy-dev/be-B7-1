@@ -10,7 +10,12 @@ from app.core.database import get_db
 from app.core.security import decode_access_token_claims
 from app.repositories.token_repository import TokenRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.auth import LoginRequest, LoginResponse, SignupRequest, SignupResponse
+from app.schemas.auth import (
+    LoginRequest,
+    LoginResponse,
+    SignupRequest,
+    SignupResponse,
+)
 from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])

@@ -94,7 +94,7 @@ def test_invalid_credentials(signup_db, username, password):
         "wrong_algorithm",
     ],
 )
-def test_chat_rejects_invalid_auth(signup_db, kind):
+def test_authenticated_api_rejects_invalid_auth(signup_db, kind):
     claims = {
         "sub": "1",
         "iat": datetime.now(UTC),

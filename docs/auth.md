@@ -5,7 +5,7 @@
 ```json
 {
   "username": "Test_User",
-  "password": "my-secure-password",
+  "password": "My-secure-password1!",
   "name": "홍길동"
 }
 ```
@@ -13,7 +13,7 @@
 | 필드 | 규칙 |
 | --- | --- |
 | username | 영문·숫자·밑줄 4~20자. 소문자로 저장하며 대소문자를 구분하지 않고 중복 검사. 공백은 허용하지 않음 |
-| password | 8~128자. 공백을 포함해 원문 그대로 해시 처리 |
+| password | 영문·숫자·특수문자(ASCII)를 각각 포함한 8~128자. 공백·한글은 허용하지 않으며 원문 그대로 해시 처리 |
 | name | 앞뒤 공백 제거 후 1~50자 |
 
 세 필드는 필수이며 추가 필드(예: `role`)는 거절합니다. 비밀번호 확인은 프론트에서 처리합니다.
@@ -64,7 +64,7 @@ uv run --with pytest pytest
 `POST /api/v1/auth/login`
 
 ```json
-{"username": "Test_User", "password": "my-secure-password"}
+{"username": "Test_User", "password": "My-secure-password1!"}
 ```
 
 성공 시 `200 OK`:

@@ -1,3 +1,5 @@
+import re
+
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from app.core.datetimes import UtcDateTime
@@ -8,8 +10,25 @@ class SignupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     username: str = Field(min_length=4, max_length=20, pattern=r"^[a-zA-Z0-9_]+$")
-    password: SecretStr = Field(min_length=8, max_length=128)
+    password: SecretStr = Field(
+        min_length=8,
+        max_length=128,
+        description="영문·숫자·특수문자를 각각 포함한 8~128자. 공백은 허용하지 않음",
+    )
     name: str = Field(min_length=1, max_length=50)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: SecretStr) -> SecretStr:
+        if re.fullmatch(
+            r"(?=.*[a-zA-Z])(?=.*[0-9])(?=.*[!-/:-@\[-`{-~])[!-~]{8,128}",
+            value.get_secret_value(),
+        ) is None:
+            raise ValueError(
+                "비밀번호는 영문, 숫자, 특수문자를 각각 포함한 "
+                "8~128자여야 하며 공백은 사용할 수 없습니다."
+            )
+        return value
 
     @field_validator("username")
     @classmethod

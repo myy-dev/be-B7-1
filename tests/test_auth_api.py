@@ -13,7 +13,7 @@ from app.main import app
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 
-PAYLOAD = {"username": "Test_User", "password": " password ", "name": " 홍길동 "}
+PAYLOAD = {"username": "Test_User", "password": "Password1!", "name": " 홍길동 "}
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ def test_signup_persists_safe_user(signup_db):
             assert user.last_login_at is None
             assert user.password_hash != PAYLOAD["password"]
             assert password_hash.verify(PAYLOAD["password"], user.password_hash)
-            assert not password_hash.verify("password", user.password_hash)
+            assert not password_hash.verify("password1!", user.password_hash)
 
     asyncio.run(check_saved())
 
@@ -84,6 +84,16 @@ def test_duplicate_username_is_case_insensitive(signup_db):
         {"username": " test_user "},
         {"password": "a" * 7},
         {"password": "a" * 129},
+        {"password": "abcdefgh"},
+        {"password": "abcdefg1"},
+        {"password": "abcdefg!"},
+        {"password": "1234567!"},
+        {"password": " Password1!"},
+        {"password": "Password1! "},
+        {"password": "Pass word1!"},
+        {"password": "Password1!\n"},
+        {"password": "Password1!\t"},
+        {"password": "한글비밀번호1!"},
         {"name": "   "},
         {"name": "가" * 51},
         {"role": "admin"},
@@ -95,6 +105,8 @@ def test_signup_rejects_invalid_input(signup_db, changes):
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_INPUT"
     assert PAYLOAD["password"] not in response.text
+    if isinstance(changes.get("password"), str):
+        assert changes["password"] not in response.text
 
     async def check_empty():
         async with signup_db() as session:
@@ -105,7 +117,7 @@ def test_signup_rejects_invalid_input(signup_db, changes):
 
 @pytest.mark.parametrize(
     "username,password,name",
-    [("abcd", "a" * 8, "가"), ("a" * 20, "a" * 128, "가" * 50)],
+    [("abcd", "abcde1!@", "가"), ("a" * 20, "a" * 126 + "1!", "가" * 50)],
 )
 def test_signup_accepts_length_boundaries(signup_db, username, password, name):
     response = TestClient(app).post(

@@ -828,7 +828,7 @@ def test_signup_user_can_create_chat_and_save_message(chat_api: _ChatAPI) -> Non
         "/api/v1/auth/signup",
         json={
             "username": "signup_owner",
-            "password": "test-password",
+            "password": "test-password1!",
             "name": "새 회원",
         },
     )
