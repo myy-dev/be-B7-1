@@ -84,7 +84,7 @@ async def _delete_app(
 
     monkeypatch.setattr("app.main.create_db_and_tables", create_tables)
     monkeypatch.setattr("app.main.engine", engine)
-    monkeypatch.setattr("app.clients.ai.AsyncOpenAI", sdk_factory)
+    monkeypatch.setattr("app.clients.openai.AsyncOpenAI", sdk_factory)
     monkeypatch.setitem(app.dependency_overrides, get_db, test_db)
     async with lifespan(app):
         async with sessions() as session:
