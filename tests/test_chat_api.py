@@ -376,6 +376,7 @@ def test_invalid_chat_uuid_returns_input_error(chat_api: _ChatAPI, method: str) 
     chat_api.authenticate()
     response = chat_api.client.request(method, "/api/v1/chats/not-a-uuid")
     _assert_error(response, 422, "INVALID_INPUT")
+    assert response.json()["error"]["message"] == "입력값을 확인해 주세요."
 
 
 @pytest.mark.parametrize(
@@ -650,17 +651,17 @@ def test_valid_question_length_saves_and_sends_trimmed_content(
 
 
 @pytest.mark.parametrize(
-    "question",
+    ("question", "too_long"),
     [
-        "",
-        "  ",
-        None,
-        123,
-        "가" * 1001,
-        "  " + "가" * 1001 + "\n",
-        "가" * 500 + " " + "나" * 500,
-        "가" * 500 + "\n" + "나" * 500,
-        "👩‍💻" * 334,
+        ("", False),
+        ("  ", False),
+        (None, False),
+        (123, False),
+        ("가" * 1001, True),
+        ("  " + "가" * 1001 + "\n", True),
+        ("가" * 500 + " " + "나" * 500, True),
+        ("가" * 500 + "\n" + "나" * 500, True),
+        ("👩‍💻" * 334, True),
     ],
     ids=[
         "empty",
@@ -675,7 +676,7 @@ def test_valid_question_length_saves_and_sends_trimmed_content(
     ],
 )
 def test_invalid_question_does_not_save_or_call_ai(
-    chat_api: _ChatAPI, question: object
+    chat_api: _ChatAPI, question: object, too_long: bool
 ) -> None:
     """빈 질문·잘못된 타입·길이 초과는 저장하거나 AI에 전달하지 않는다."""
     chat_api.authenticate()
@@ -685,6 +686,15 @@ def test_invalid_question_does_not_save_or_call_ai(
         f"/api/v1/chats/{chat_id}/messages", json={"question": question}
     )
     _assert_error(response, 422, "INVALID_INPUT")
+    expected_message = (
+        "질문은 1,000자를 초과할 수 없습니다."
+        if too_long
+        else "입력값을 확인해 주세요."
+    )
+    assert response.json()["error"]["message"] == expected_message
+    assert "가" * 1001 not in response.text
+    assert "string_too_long" not in response.text
+    assert "max_length" not in response.text
     ai.generate_answer.assert_not_awaited()
     assert _messages(chat_api) == []
 
