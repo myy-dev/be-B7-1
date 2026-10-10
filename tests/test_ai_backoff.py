@@ -7,7 +7,7 @@ import httpx2
 import pytest
 from openai import APIStatusError, AsyncOpenAI
 
-from app.clients.ai import AIClient
+from app.clients.openai import OpenAIClient
 from app.core.errors import APIError
 
 
@@ -41,12 +41,12 @@ def test_direct_retries_recover_or_exhaust(
 
     connection = httpx2.AsyncClient(transport=httpx2.MockTransport(respond))
     sdk = AsyncOpenAI(api_key="test-only", max_retries=0, http_client=connection)
-    monkeypatch.setattr("app.clients.ai.AsyncOpenAI", MagicMock(return_value=sdk))
+    monkeypatch.setattr("app.clients.openai.AsyncOpenAI", MagicMock(return_value=sdk))
     jitter = MagicMock(side_effect=[0.75, 0.8, 0.9, 1.0])
-    monkeypatch.setattr("app.clients.ai.uniform", jitter)
+    monkeypatch.setattr("app.clients.openai.uniform", jitter)
     sleep = AsyncMock()
-    monkeypatch.setattr("app.clients.ai.asyncio.sleep", sleep)
-    client = AIClient("test-only", "test-model", 30, max_retries=4)
+    monkeypatch.setattr("app.clients.openai.asyncio.sleep", sleep)
+    client = OpenAIClient("test-only", "test-model", 30, max_retries=4)
 
     async def run() -> None:
         try:
@@ -101,13 +101,13 @@ def test_server_delay_and_backoff_cap(
     expected: float,
 ) -> None:
     """서버 초 값은 그대로 사용하고 그 외에는 백오프와 지터를 적용한다."""
-    monkeypatch.setattr("app.clients.ai.AsyncOpenAI", MagicMock())
-    monkeypatch.setattr("app.clients.ai.uniform", lambda low, high: 0.75)
+    monkeypatch.setattr("app.clients.openai.AsyncOpenAI", MagicMock())
+    monkeypatch.setattr("app.clients.openai.uniform", lambda low, high: 0.75)
     response = httpx2.Response(
         500, headers=headers, request=httpx2.Request("POST", "https://test/responses")
     )
     error = APIStatusError("test", response=response, body=None)
-    client = AIClient("test-only", "test-model", 30, max_retries=4)
+    client = OpenAIClient("test-only", "test-model", 30, max_retries=4)
     assert client._retry_delay(error, retry_index) == expected
 
 
@@ -129,11 +129,11 @@ def test_retry_classification(
     expected: bool,
 ) -> None:
     """허용된 상태만 재시도하고 서버의 재시도 금지 지시를 우선한다."""
-    monkeypatch.setattr("app.clients.ai.AsyncOpenAI", MagicMock())
+    monkeypatch.setattr("app.clients.openai.AsyncOpenAI", MagicMock())
     response = httpx2.Response(
         status, headers=headers, request=httpx2.Request("POST", "https://test")
     )
-    client = AIClient("test-only", "test-model", 30, max_retries=4)
+    client = OpenAIClient("test-only", "test-model", 30, max_retries=4)
     assert client._should_retry(
         APIStatusError("test", response=response, body=None)
     ) is expected
@@ -162,10 +162,10 @@ def test_total_timeout_and_cancellation(
 
     create = AsyncMock(side_effect=respond)
     sdk = SimpleNamespace(responses=SimpleNamespace(create=create))
-    monkeypatch.setattr("app.clients.ai.AsyncOpenAI", MagicMock(return_value=sdk))
+    monkeypatch.setattr("app.clients.openai.AsyncOpenAI", MagicMock(return_value=sdk))
     sleep = AsyncMock(side_effect=wait)
-    monkeypatch.setattr("app.clients.ai.asyncio.sleep", sleep)
-    client = AIClient("test-only", "test-model", 0.01, max_retries=4)
+    monkeypatch.setattr("app.clients.openai.asyncio.sleep", sleep)
+    client = OpenAIClient("test-only", "test-model", 0.01, max_retries=4)
     if scenario == "no_budget":
         monkeypatch.setattr(client, "_retry_delay", lambda error, index: 30.0)
 

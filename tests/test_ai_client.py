@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 import app.main as main
 from app.api.dependencies import get_ai_client
-from app.clients.ai import AIClient
+from app.clients.openai import OpenAIClient
 from app.core.config import Settings
 from app.core.errors import APIError
 
@@ -81,9 +81,9 @@ def test_sdk_request_response_and_error_mapping(
     http_client = httpx2.AsyncClient(transport=transport)
     sdk = AsyncOpenAI(api_key="test-only", max_retries=0, http_client=http_client)
     constructor = MagicMock(return_value=sdk)
-    monkeypatch.setattr("app.clients.ai.AsyncOpenAI", constructor)
+    monkeypatch.setattr("app.clients.openai.AsyncOpenAI", constructor)
     timeout = 0.01 if scenario == "deadline" else 30
-    client = AIClient("test-only", "test-model", timeout, max_retries=0)
+    client = OpenAIClient("test-only", "test-model", timeout, max_retries=0)
     constructor.assert_called_once_with(
         api_key="test-only", timeout=timeout, max_retries=0
     )
@@ -182,8 +182,8 @@ def test_client_keeps_sdk_retries_disabled(
     """직접 재시도 설정을 보관하면서 SDK 재시도는 0으로 고정한다."""
     sdk = MagicMock()
     constructor = MagicMock(return_value=sdk)
-    monkeypatch.setattr("app.clients.ai.AsyncOpenAI", constructor)
-    client = AIClient("test-only", "test-model", 30, max_retries)
+    monkeypatch.setattr("app.clients.openai.AsyncOpenAI", constructor)
+    client = OpenAIClient("test-only", "test-model", 30, max_retries)
     assert client.max_retries == max_retries
     constructor.assert_called_once_with(
         api_key="test-only", timeout=30, max_retries=0
@@ -210,7 +210,7 @@ def test_lifespan_reuses_client_and_cleans_up(
     engine = MagicMock()
     engine.dispose = AsyncMock()
     monkeypatch.setattr(main, "engine", engine)
-    client = MagicMock(spec=AIClient)
+    client = MagicMock(spec=OpenAIClient)
     client.close = AsyncMock()
     failure = RuntimeError("lifecycle failure")
     constructor = MagicMock(return_value=client)
@@ -218,7 +218,7 @@ def test_lifespan_reuses_client_and_cleans_up(
         constructor.side_effect = failure
     elif scenario == "close_error":
         client.close.side_effect = failure
-    monkeypatch.setattr(main, "AIClient", constructor)
+    monkeypatch.setattr(main, "OpenAIClient", constructor)
     app = FastAPI(lifespan=main.lifespan)
 
     async def run() -> None:

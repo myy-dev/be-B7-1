@@ -150,14 +150,14 @@ def test_app_sdk_and_database_integration(
 
     sleep = AsyncMock(side_effect=wait)
     monkeypatch.setattr(
-        "app.clients.ai.asyncio",
+        "app.clients.openai.asyncio",
         SimpleNamespace(
             get_running_loop=asyncio.get_running_loop,
             timeout=asyncio.timeout,
             sleep=sleep,
         ),
     )
-    monkeypatch.setattr("app.clients.ai.uniform", lambda low, high: 1.0)
+    monkeypatch.setattr("app.clients.openai.uniform", lambda low, high: 1.0)
     monkeypatch.setattr("app.main.settings", settings)
     monkeypatch.setitem(
         app.dependency_overrides, get_current_user_id, lambda: 2**40 + 7
@@ -263,7 +263,7 @@ def test_app_sdk_and_database_integration(
                 http_client=connection,
             )
 
-        monkeypatch.setattr("app.clients.ai.AsyncOpenAI", sdk_factory)
+        monkeypatch.setattr("app.clients.openai.AsyncOpenAI", sdk_factory)
         async with lifespan(app):
             async with sessions() as session:
                 session.add(
