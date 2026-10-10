@@ -181,9 +181,10 @@ def _error_response(
     *,
     exception_type: str,
     headers: dict[str, str] | None = None,
+    message: str | None = None,
 ) -> JSONResponse:
     request_id = request.state.request_id
-    content = error_body(request, code, ERROR_MESSAGES[code])
+    content = error_body(request, code, message or ERROR_MESSAGES[code])
     log_event(
         "db_save_failed" if code == "DB_ERROR" else "api_error",
         request_id=request_id,
@@ -227,7 +228,17 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
     """
     if not isinstance(exc, RequestValidationError):
         raise exc
-    return _error_response(request, "INVALID_INPUT", exception_type=type(exc).__name__)
+    message = None
+    for error in exc.errors():
+        if error["loc"] == ("body", "question") and error["type"] == "string_too_long":
+            message = "질문은 1,000자를 초과할 수 없습니다."
+            break
+    return _error_response(
+        request,
+        "INVALID_INPUT",
+        exception_type=type(exc).__name__,
+        message=message,
+    )
 
 
 async def handle_database_error(request: Request, exc: Exception) -> JSONResponse:
