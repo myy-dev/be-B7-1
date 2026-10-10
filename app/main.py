@@ -18,6 +18,7 @@ async def lifespan(app: FastAPI):
             settings.openai_api_key,
             settings.openai_model,
             settings.ai_timeout_seconds,
+            settings.ai_max_retries,
         )
         app.state.ai_client = client
         try:

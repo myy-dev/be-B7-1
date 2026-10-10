@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     openai_api_key: str
     openai_model: str = "gpt-6-luna"
     ai_timeout_seconds: float = Field(default=30, gt=0, allow_inf_nan=False)
+    ai_max_retries: int = Field(default=4, ge=0)
     jwt_secret_key: str = Field(min_length=32)
     access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
     system_log_path: str = "logs/system.jsonl"

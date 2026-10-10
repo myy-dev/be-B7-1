@@ -71,6 +71,21 @@ def test_errors_use_common_schema_and_named_examples(docs_client: TestClient) ->
     assert docs_client.get("/docs").status_code == 200
 
 
+def test_question_documents_length_limit(docs_client: TestClient) -> None:
+    """질문 요청의 길이 제한과 설명이 OpenAPI에 반영된다."""
+    schema = docs_client.get("/openapi.json").json()
+    request_schema = schema["paths"][MESSAGE_PATH]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert request_schema["$ref"] == "#/components/schemas/MessageCreateRequest"
+    question = schema["components"]["schemas"]["MessageCreateRequest"]["properties"][
+        "question"
+    ]
+    assert question["minLength"] == 1
+    assert question["maxLength"] == 1000
+    assert "앞뒤 공백 제거 후 1~1,000자" in question["description"]
+
+
 def test_delete_documents_no_body_and_expected_errors(docs_client: TestClient) -> None:
     """삭제 API는 요청·성공 본문 없이 인증과 예상 오류를 문서화한다."""
     operation = docs_client.get("/openapi.json").json()["paths"][CHAT_PATH]["delete"]

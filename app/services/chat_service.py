@@ -28,7 +28,7 @@ class ChatService:
         error_code: ResponseErrorCode,
         started_at: float,
     ) -> None:
-        """AI 처리 실패를 같은 대화 기록에 저장한다.
+        """대화 기록의 실패 상태를 저장한다.
 
         Args:
             message: 실패로 전환할 대화 기록.
@@ -57,7 +57,7 @@ class ChatService:
         )
 
     async def create_chat(self, user_id: int) -> ChatResponse:
-        """사용자의 채팅방을 저장하고 생성 응답을 반환한다."""
+        """사용자의 채팅방을 생성한다."""
         chat = await self.repository.create(user_id)
         log_event(
             "db_save_succeeded",
@@ -68,14 +68,14 @@ class ChatService:
         return ChatResponse.model_validate(chat)
 
     async def list_chats(self, user_id: int) -> ChatListResponse:
-        """사용자에게 속한 전체 채팅방을 목록으로 내림차순으로 반환한다."""
+        """사용자의 채팅방 목록을 조회한다."""
         chats = await self.repository.list_by_user(user_id)
         return ChatListResponse(
             items=[ChatResponse.model_validate(chat) for chat in chats]
         )
 
     async def get_chat(self, chat_id: UUID, user_id: int) -> ChatDetailResponse:
-        """소유권을 확인하고 채팅방과 전체 대화 기록을 반환한다."""
+        """사용자의 채팅방과 대화 기록을 조회한다."""
         chat = await self.repository.get_by_id_and_user(chat_id, user_id)
         if chat is None:
             raise APIError("CHAT_NOT_FOUND")
@@ -87,7 +87,7 @@ class ChatService:
         )
 
     async def delete_chat(self, chat_id: UUID, user_id: int) -> None:
-        """본인 채팅방을 논리 삭제하고 대상이 없으면 조회 오류를 반환한다."""
+        """사용자의 채팅방을 논리 삭제한다."""
         deleted = await self.repository.soft_delete(chat_id, user_id, datetime.now(UTC))
         if not deleted:
             raise APIError("CHAT_NOT_FOUND")
@@ -106,7 +106,7 @@ class ChatService:
         question: str,
         ai_client: AIClient,
     ) -> MessageResponse:
-        """질문을 먼저 저장하고 AI 답변 또는 실패 결과를 같은 기록에 저장한다.
+        """질문에 대한 AI 답변을 생성하고 대화 기록을 저장한다.
 
         Args:
             chat_id: 질문을 보낼 채팅방의 ID.
