@@ -21,7 +21,7 @@ class AIClient:
     def __init__(
         self, api_key: str, model: str, timeout: float, max_retries: int
     ) -> None:
-        """요청에 사용할 설정과 SDK 클라이언트를 보관한다.
+        """AI 클라이언트를 초기화한다.
 
         Args:
             api_key: 서버의 OpenAI API 키.
@@ -37,7 +37,7 @@ class AIClient:
     async def generate_answer(
         self, question: str, history: list[tuple[str, str]]
     ) -> str:
-        """대화 문맥과 현재 질문을 보내고 완성된 답변만 반환한다.
+        """대화 이력을 바탕으로 AI 답변을 생성한다.
 
         Args:
             question: 현재 사용자의 질문.
@@ -71,7 +71,7 @@ class AIClient:
         return self._extract_answer(response)
 
     async def _request_with_retries(self, messages: ResponseInputParam) -> Response:
-        """전체 시간 제한 안에서 같은 입력을 재시도하고 최종 응답을 반환한다."""
+        """재시도 정책에 따라 AI API를 호출한다."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.timeout
         async with asyncio.timeout(self.timeout):
@@ -92,7 +92,7 @@ class AIClient:
         raise APIError("AI_UNAVAILABLE")
 
     def _extract_answer(self, response: Response) -> str:
-        """완료 상태와 답변 형식을 검증하고 텍스트를 반환한다."""
+        """AI 응답을 검증하고 답변을 추출한다."""
         try:
             response_status = response.status
             answer = response.output_text
@@ -107,7 +107,7 @@ class AIClient:
         return answer
 
     def _should_retry(self, error: APIConnectionError | APIStatusError) -> bool:
-        """통신 오류와 허용된 HTTP 상태만 재시도 대상으로 판단한다."""
+        """오류의 재시도 여부를 판단한다."""
         if isinstance(error, APIStatusError):
             if error.response.headers.get("x-should-retry") == "false":
                 return False
@@ -119,7 +119,7 @@ class AIClient:
     def _retry_delay(
         self, error: APIConnectionError | APIStatusError, retry_index: int
     ) -> float:
-        """Retry-After의 초 값을 우선하고 없으면 지수적 대기에 지터를 적용한다."""
+        """재시도 대기 시간을 계산한다."""
         if isinstance(error, APIStatusError):
             try:
                 delay = float(error.response.headers.get("retry-after", ""))
@@ -132,5 +132,5 @@ class AIClient:
         return base_delay * uniform(0.75, 1.0)
 
     async def close(self) -> None:
-        """앱이 종료되면 SDK의 비동기 HTTP 연결을 정리한다."""
+        """AI 클라이언트의 연결 자원을 정리한다."""
         await self._client.close()
