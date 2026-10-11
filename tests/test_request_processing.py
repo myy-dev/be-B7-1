@@ -126,6 +126,7 @@ def test_events_are_written_to_configured_jsonl(
         path="/api/v1/chat",
         user_id="7",
         error_code="AI_UNAVAILABLE",
+        status_code=503,
         result="failure",
     )
     for handler in logger.handlers:
@@ -138,6 +139,8 @@ def test_events_are_written_to_configured_jsonl(
     assert record["path"] == "/api/v1/chat"
     assert record["user_id"] == "7"
     assert record["error_code"] == "AI_UNAVAILABLE"
+    assert record["status_code"] == 503
+    assert "http_status" not in record
     for handler in logger.handlers:
         handler.close()
 
@@ -186,6 +189,11 @@ def test_specified_errors_share_response_and_log_id(
     assert all(record.method == "GET" for record in event_logs.records)
     assert all(record.path == f"/error/{code}" for record in event_logs.records)
     assert "private-query" not in event_logs.text
+    assert event_logs.records[-1].status_code == status_code
+    assert all(
+        "http_status" not in json.loads(EventLogFormatter().format(record))
+        for record in event_logs.records
+    )
     assert all(
         record.request_id == error["request_id"] for record in event_logs.records
     )
@@ -254,6 +262,7 @@ def test_unexpected_error_is_logged_and_reraised(
         client.get("/unexpected-error")
     assert event_logs.records[-1].getMessage() == "request_failed"
     assert event_logs.records[-1].exception_type == "RuntimeError"
+    assert event_logs.records[-1].status_code == 500
     assert all(record.method == "GET" for record in event_logs.records)
     assert all(record.path == "/unexpected-error" for record in event_logs.records)
     assert "private runtime detail" not in event_logs.text

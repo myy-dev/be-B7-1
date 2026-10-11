@@ -49,7 +49,7 @@ class EventLogFormatter(logging.Formatter):
             "result",
             "error_code",
             "duration_ms",
-            "http_status",
+            "status_code",
             "exception_type",
         ):
             fields[name] = getattr(record, name, None)
@@ -103,7 +103,7 @@ def log_event(
     result: Literal["success", "failure"] | None = None,
     error_code: str | None = None,
     duration_ms: float | None = None,
-    http_status: int | None = None,
+    status_code: int | None = None,
     exception_type: str | None = None,
 ) -> None:
     """현재 요청의 식별자로 처리 이벤트를 기록한다.
@@ -132,7 +132,7 @@ def log_event(
             "result": result,
             "error_code": error_code,
             "duration_ms": duration_ms,
-            "http_status": http_status,
+            "status_code": status_code,
             "exception_type": exception_type,
         },
     )

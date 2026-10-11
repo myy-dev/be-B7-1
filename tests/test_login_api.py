@@ -49,7 +49,7 @@ def test_member_events_distinguish_outcomes(signup_db, monkeypatch):
                 "user_id": user_id if username == PAYLOAD["username"] else None,
                 "result": "failure",
                 "error_code": "INVALID_CREDENTIALS",
-                "http_status": 401,
+                "status_code": 401,
             },
         )
 

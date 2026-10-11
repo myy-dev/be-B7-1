@@ -61,7 +61,7 @@ class RequestContextMiddleware:
                 chat_id=scope["state"].get("chat_id"),
                 result="failure",
                 error_code="INTERNAL_ERROR",
-                http_status=500,
+                status_code=500,
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
                 exception_type=type(exc).__name__,
             )
@@ -76,7 +76,7 @@ class RequestContextMiddleware:
                 result="success" if status_code < 400 else "failure",
                 error_code=scope["state"].get("error_code"),
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
-                http_status=status_code,
+                status_code=status_code,
             )
         finally:
             request_id_context.reset(token)

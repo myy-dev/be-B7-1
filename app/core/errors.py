@@ -193,7 +193,7 @@ def _error_response(
         result="failure",
         error_code=code,
         exception_type=exception_type,
-        http_status=ERROR_STATUS_CODES[code],
+        status_code=ERROR_STATUS_CODES[code],
     )
     payload = ErrorResponse.model_validate(content)
     return JSONResponse(
