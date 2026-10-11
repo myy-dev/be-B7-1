@@ -14,6 +14,7 @@ from openai import (
 )
 from openai.types.responses import Response, ResponseInputParam
 
+from app.clients.ai import DEFAULT_INSTRUCTIONS
 from app.core.errors import APIError
 
 
@@ -82,7 +83,10 @@ class OpenAIClient:
                     raise TimeoutError
                 try:
                     return await self._client.responses.create(
-                        model=self.model, input=messages, store=False
+                        model=self.model,
+                        instructions=DEFAULT_INSTRUCTIONS,
+                        input=messages,
+                        store=False,
                     )
                 except (APIConnectionError, APIStatusError) as exc:
                     if attempt == self.max_retries or not self._should_retry(exc):

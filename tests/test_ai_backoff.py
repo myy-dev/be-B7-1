@@ -7,6 +7,7 @@ import httpx2
 import pytest
 from openai import APIStatusError, AsyncOpenAI
 
+from app.clients.ai import DEFAULT_INSTRUCTIONS
 from app.clients.openai import OpenAIClient
 from app.core.errors import APIError
 
@@ -69,6 +70,7 @@ def test_direct_retries_recover_or_exhaust(
     assert all(call.args == (0.75, 1.0) for call in jitter.call_args_list)
     payloads = [json.loads(request.content) for request in requests]
     assert all(payload == payloads[0] for payload in payloads)
+    assert all(payload["instructions"] == DEFAULT_INSTRUCTIONS for payload in payloads)
     assert payloads[0]["input"] == [
         {"role": "user", "content": "이전"},
         {"role": "assistant", "content": "답변"},

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 import app.main as main
 from app.api.dependencies import get_ai_client
+from app.clients.ai import DEFAULT_INSTRUCTIONS
 from app.clients.openai import OpenAIClient
 from app.core.config import Settings
 from app.core.errors import APIError
@@ -35,6 +36,7 @@ def _response(
     ("scenario", "expected_code"),
     [
         ("success", None),
+        ("without_history", None),
         ("empty", "AI_UNAVAILABLE"),
         ("incomplete", "AI_UNAVAILABLE"),
         ("timeout", "AI_TIMEOUT"),
@@ -84,6 +86,7 @@ def test_sdk_request_response_and_error_mapping(
     monkeypatch.setattr("app.clients.openai.AsyncOpenAI", constructor)
     timeout = 0.01 if scenario == "deadline" else 30
     client = OpenAIClient("test-only", "test-model", timeout, max_retries=0)
+    history = [] if scenario == "without_history" else [("이전 질문", "답변")]
     constructor.assert_called_once_with(
         api_key="test-only", timeout=timeout, max_retries=0
     )
@@ -91,11 +94,11 @@ def test_sdk_request_response_and_error_mapping(
     async def run() -> None:
         try:
             if expected_code is None:
-                answer = await client.generate_answer("현재 질문", [("이전 질문", "답변")])
+                answer = await client.generate_answer("현재 질문", history)
                 assert answer == "AI 답변"
             else:
                 with pytest.raises(APIError) as caught:
-                    await client.generate_answer("현재 질문", [("이전 질문", "답변")])
+                    await client.generate_answer("현재 질문", history)
                 assert caught.value.code == expected_code
                 assert "hidden" not in str(caught.value)
         finally:
@@ -107,11 +110,15 @@ def test_sdk_request_response_and_error_mapping(
     payload = json.loads(requests[0].content)
     assert payload["model"] == "test-model"
     assert payload["store"] is False
-    assert payload["input"] == [
+    assert payload["instructions"] == DEFAULT_INSTRUCTIONS
+    expected_input = [
         {"role": "user", "content": "이전 질문"},
         {"role": "assistant", "content": "답변"},
         {"role": "user", "content": "현재 질문"},
     ]
+    if scenario == "without_history":
+        expected_input = expected_input[-1:]
+    assert payload["input"] == expected_input
 
 
 @pytest.mark.parametrize(
