@@ -120,8 +120,16 @@ def log_event(
         exception_type: 원문을 제외한 예외 클래스 이름.
     """
     current_id = request_id or request_id_context.get()
+    if event in {"request_failed", "ai_call_failed", "db_save_failed"} or (
+        status_code is not None and status_code >= 500
+    ):
+        level = logging.ERROR
+    elif event == "user_login_failed":
+        level = logging.WARNING
+    else:
+        level = logging.INFO
     logging.getLogger("app.events").log(
-        logging.ERROR if result == "failure" else logging.INFO,
+        level,
         event,
         extra={
             "request_id": str(current_id) if current_id else None,

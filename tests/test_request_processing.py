@@ -22,7 +22,7 @@ from app.core.errors import (
     APIError,
     configure_request_processing,
 )
-from app.core.logging import EventLogFormatter, configure_logging, log_event
+from app.core.logging import EventLogFormatter, LogEvent, configure_logging, log_event
 from app.core.request_context import request_id_context
 from app.schemas.error import ErrorCode
 
@@ -109,6 +109,35 @@ def event_logs(
     return caplog
 
 
+@pytest.mark.parametrize(
+    ("event", "status_code", "expected_level"),
+    [
+        ("user_login_failed", 401, "WARNING"),
+        ("user_login_failed", 500, "ERROR"),
+        ("request_failed", None, "ERROR"),
+        ("ai_call_failed", None, "ERROR"),
+        ("db_save_failed", None, "ERROR"),
+        ("api_error", 403, "INFO"),
+        ("api_error", 429, "INFO"),
+        ("api_error", 499, "INFO"),
+        ("api_error", 500, "ERROR"),
+        ("request_completed", 401, "INFO"),
+        ("request_completed", 503, "ERROR"),
+    ],
+)
+def test_event_levels_distinguish_warnings_and_failures(
+    event_logs: pytest.LogCaptureFixture,
+    event: LogEvent,
+    status_code: int | None,
+    expected_level: str,
+) -> None:
+    """ログイン失敗と障害を区別し、failureだけではERRORにしない。"""
+    log_event(event, status_code=status_code, result="failure")
+    record = json.loads(EventLogFormatter().format(event_logs.records[-1]))
+    assert record["level"] == expected_level
+    assert record["result"] == "failure"
+
+
 def test_events_are_written_to_configured_jsonl(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -190,6 +219,9 @@ def test_specified_errors_share_response_and_log_id(
     assert all(record.path == f"/error/{code}" for record in event_logs.records)
     assert "private-query" not in event_logs.text
     assert event_logs.records[-1].status_code == status_code
+    assert event_logs.records[-1].levelname == (
+        "ERROR" if status_code >= 500 else "INFO"
+    )
     assert all(
         "http_status" not in json.loads(EventLogFormatter().format(record))
         for record in event_logs.records
