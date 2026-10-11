@@ -28,6 +28,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.dependencies import get_ai_client, get_current_user_id
 from app.api.v1.router import api_router, health_router
 from app.clients.ai import AIClient
+from app.core.chat_request_limiter import ChatRequestLimiter
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
 from app.core.errors import APIError, DatabaseSaveError, configure_request_processing
 from app.models.chat import Chat, ChatLog
@@ -111,6 +112,7 @@ def chat_api() -> Iterator[_ChatAPI]:
 
     asyncio.run(create_tables())
     app = FastAPI()
+    app.state.chat_request_limiter = ChatRequestLimiter()
     configure_request_processing(app)
     app.include_router(health_router)
     app.include_router(api_router, prefix="/api/v1")

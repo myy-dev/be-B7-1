@@ -41,6 +41,7 @@ def error_response(*errors: AppError) -> dict[str, Any]:
 
 
 CHAT_NOT_FOUND_RESPONSE = error_response(APIError("CHAT_NOT_FOUND"))
+CHAT_BUSY_RESPONSE = error_response(APIError("CHAT_BUSY"))
 INVALID_INPUT_RESPONSE = error_response(APIError("INVALID_INPUT"))
 DB_ERROR_RESPONSE = error_response(APIError("DB_ERROR"), internal_error())
 AI_UNAVAILABLE_RESPONSE = error_response(APIError("AI_UNAVAILABLE"))

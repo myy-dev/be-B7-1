@@ -3,6 +3,7 @@ from time import perf_counter
 from uuid import UUID
 
 from app.clients.ai import AIClient
+from app.core.chat_request_limiter import ChatRequestLimiter
 from app.core.errors import APIError
 from app.core.logging import log_event
 from app.models.chat import ChatLog
@@ -17,8 +18,12 @@ from app.schemas.error import ResponseErrorCode
 
 
 class ChatService:
-    def __init__(self, repository: ChatRepository) -> None:
+    def __init__(
+        self, repository: ChatRepository, limiter: ChatRequestLimiter
+    ) -> None:
+        """요청 저장소와 앱 전체에서 공유하는 사용자 제한기를 연결한다."""
         self.repository = repository
+        self.limiter = limiter
 
     async def _save_failed_message(
         self,
@@ -119,60 +124,63 @@ class ChatService:
             질문·답변 저장을 완료한 대화 기록.
 
         Raises:
-            APIError: 소유권 검사 또는 AI 호출에 실패한 경우.
+            APIError: 소유권 검사·사용자 점유 또는 AI 호출에 실패한 경우.
             Exception: 예상하지 못한 AI 예외가 발생하고 실패 기록 저장 후 다시 전달되는 경우.
             SQLAlchemyError: 질문이나 처리 결과 저장에 실패한 경우.
         """
         chat = await self.repository.get_by_id_and_user(chat_id, user_id)
         if chat is None:
             raise APIError("CHAT_NOT_FOUND")
-        previous = await self.repository.list_recent_completed(chat_id)
-        history = [
-            (item.question, item.answer) for item in previous if item.answer is not None
-        ]
-        message = ChatLog(
-            request_id=request_id,
-            chat_id=chat_id,
-            question=question,
-            model=ai_client.model,
-            status="pending",
-        )
-        await self.repository.save_message(message)
-        log_event(
-            "db_save_succeeded",
-            user_id=str(user_id),
-            chat_id=chat_id,
-            result="success",
-        )
-        started_at = perf_counter()
-        log_event("ai_call_started", user_id=str(user_id), chat_id=chat_id)
-        try:
-            answer = await ai_client.generate_answer(question, history)
-        except APIError as exc:
-            await self._save_failed_message(
-                message, user_id, chat_id, exc.api_code, started_at
+        async with self.limiter.acquire(user_id):
+            previous = await self.repository.list_recent_completed(chat_id)
+            history = [
+                (item.question, item.answer)
+                for item in previous
+                if item.answer is not None
+            ]
+            message = ChatLog(
+                request_id=request_id,
+                chat_id=chat_id,
+                question=question,
+                model=ai_client.model,
+                status="pending",
             )
-            raise
-        except Exception:
-            await self._save_failed_message(
-                message, user_id, chat_id, "INTERNAL_ERROR", started_at
+            await self.repository.save_message(message)
+            log_event(
+                "db_save_succeeded",
+                user_id=str(user_id),
+                chat_id=chat_id,
+                result="success",
             )
-            raise
-        log_event(
-            "ai_call_succeeded",
-            user_id=str(user_id),
-            chat_id=chat_id,
-            result="success",
-            duration_ms=round((perf_counter() - started_at) * 1000, 3),
-        )
-        message.answer = answer
-        message.status = "completed"
-        message.finished_at = datetime.now(UTC)
-        await self.repository.save_message(message)
-        log_event(
-            "db_save_succeeded",
-            user_id=str(user_id),
-            chat_id=chat_id,
-            result="success",
-        )
-        return MessageResponse.model_validate(message)
+            started_at = perf_counter()
+            log_event("ai_call_started", user_id=str(user_id), chat_id=chat_id)
+            try:
+                answer = await ai_client.generate_answer(question, history)
+            except APIError as exc:
+                await self._save_failed_message(
+                    message, user_id, chat_id, exc.api_code, started_at
+                )
+                raise
+            except Exception:
+                await self._save_failed_message(
+                    message, user_id, chat_id, "INTERNAL_ERROR", started_at
+                )
+                raise
+            log_event(
+                "ai_call_succeeded",
+                user_id=str(user_id),
+                chat_id=chat_id,
+                result="success",
+                duration_ms=round((perf_counter() - started_at) * 1000, 3),
+            )
+            message.answer = answer
+            message.status = "completed"
+            message.finished_at = datetime.now(UTC)
+            await self.repository.save_message(message)
+            log_event(
+                "db_save_succeeded",
+                user_id=str(user_id),
+                chat_id=chat_id,
+                result="success",
+            )
+            return MessageResponse.model_validate(message)

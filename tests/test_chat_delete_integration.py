@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx2
@@ -13,8 +14,10 @@ from openai import AsyncOpenAI
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.api.dependencies import get_ai_client
 from app.core.config import Settings
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
+from app.core.errors import APIError
 from app.core.security import create_access_token
 from app.main import app, lifespan
 from app.models.chat import Chat, ChatLog
@@ -135,6 +138,157 @@ async def _assert_hidden(client: AsyncClient, path: str) -> None:
         await client.post(path + "/messages", json={"question": "삭제 후 질문"}),
         "CHAT_NOT_FOUND",
     )
+
+
+@pytest.mark.parametrize("same_room", [True, False])
+def test_user_concurrency_across_rooms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_room: bool
+) -> None:
+    """같은 사용자의 중복은 저장·AI 호출 없이 거절하고 다른 사용자는 허용한다."""
+
+    async def run() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            raise AssertionError("모의 AI 외 SDK 호출은 없어야 한다.")
+
+        async def answer(question: str, history: list[tuple[str, str]]) -> str:
+            if question == "첫 질문":
+                started.set()
+                await release.wait()
+            return "답변"
+
+        async with _delete_app(tmp_path, monkeypatch, respond) as env:
+            ai = AsyncMock()
+            ai.model = "test-model"
+            ai.generate_answer.side_effect = answer
+            monkeypatch.setitem(app.dependency_overrides, get_ai_client, lambda: ai)
+            first_room = (await env.client.post("/api/v1/chats")).json()["chat_id"]
+            second_room = (await env.client.post("/api/v1/chats")).json()["chat_id"]
+            async with env.sessions() as session:
+                session.add(
+                    User(id=2, username="other", password_hash="test", name="회원")
+                )
+                await session.commit()
+            token, _ = create_access_token(2)
+            other_headers = {"Authorization": f"Bearer {token}"}
+            other_room = (
+                await env.client.post("/api/v1/chats", headers=other_headers)
+            ).json()["chat_id"]
+            first_path = f"/api/v1/chats/{first_room}/messages"
+            duplicate_room = first_room if same_room else second_room
+            duplicate_path = f"/api/v1/chats/{duplicate_room}/messages"
+            task = asyncio.create_task(
+                env.client.post(first_path, json={"question": "첫 질문"})
+            )
+            try:
+                await asyncio.wait_for(started.wait(), 2)
+                duplicate = await env.client.post(
+                    duplicate_path, json={"question": "중복 질문"}
+                )
+                _assert_error(duplicate, "CHAT_BUSY", 409)
+                assert (
+                    duplicate.json()["error"]["message"]
+                    == APIError("CHAT_BUSY").message
+                )
+                assert ai.generate_answer.await_count == 1
+                async with env.sessions() as session:
+                    records = list((await session.scalars(select(ChatLog))).all())
+                    assert [(m.question, m.status) for m in records] == [
+                        ("첫 질문", "pending")
+                    ]
+                # 점유 중에도 소유권 오류는 기존 404를 유지한다.
+                _assert_error(
+                    await env.client.post(
+                        f"/api/v1/chats/{other_room}/messages",
+                        json={"question": "타인 방"},
+                    ),
+                    "CHAT_NOT_FOUND",
+                )
+                other = await env.client.post(
+                    f"/api/v1/chats/{other_room}/messages",
+                    headers=other_headers,
+                    json={"question": "다른 사용자 질문"},
+                )
+                assert other.status_code == 201
+            finally:
+                release.set()
+                first = await task
+            assert first.status_code == 201
+            next_response = await env.client.post(
+                first_path, json={"question": "다음 질문"}
+            )
+            assert next_response.status_code == 201
+            assert ai.generate_answer.call_args.args[1] == [("첫 질문", "답변")]
+            assert ai.generate_answer.await_count == 3
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("ending", ["failure", "timeout", "unexpected", "cancel"])
+def test_user_slot_released_after_unsuccessful_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    """AI 오류·시간 초과·작업 취소 후 사용자 점유를 반환한다."""
+
+    async def run() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            raise AssertionError("모의 AI 외 SDK 호출은 없어야 한다.")
+
+        async def answer(question: str, history: list[tuple[str, str]]) -> str:
+            if question == "첫 질문":
+                started.set()
+                await release.wait()
+                if ending == "unexpected":
+                    raise RuntimeError("test-only")
+                raise APIError(
+                    "AI_TIMEOUT" if ending == "timeout" else "AI_UNAVAILABLE"
+                )
+            return "답변"
+
+        async with _delete_app(tmp_path, monkeypatch, respond) as env:
+            ai = AsyncMock()
+            ai.model = "test-model"
+            ai.generate_answer.side_effect = answer
+            monkeypatch.setitem(app.dependency_overrides, get_ai_client, lambda: ai)
+            room = (await env.client.post("/api/v1/chats")).json()["chat_id"]
+            path = f"/api/v1/chats/{room}/messages"
+            task = asyncio.create_task(
+                env.client.post(path, json={"question": "첫 질문"})
+            )
+            try:
+                await asyncio.wait_for(started.wait(), 2)
+                if ending == "cancel":
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                else:
+                    release.set()
+                    response = await task
+                    expected = {"failure": 502, "timeout": 504, "unexpected": 500}
+                    assert response.status_code == expected[ending]
+                async with env.sessions() as session:
+                    saved = (await session.scalars(select(ChatLog))).one()
+                    assert saved.status == (
+                        "pending" if ending == "cancel" else "failed"
+                    )
+                # 취소 후 남은 pending도 다음 질문의 실행 여부로 취급하지 않는다.
+                next_response = await env.client.post(
+                    path, json={"question": "다음 질문"}
+                )
+                assert next_response.status_code == 201
+                assert ai.generate_answer.await_count == 2
+            finally:
+                release.set()
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(
