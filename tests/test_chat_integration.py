@@ -423,7 +423,7 @@ def test_app_sdk_and_database_integration(
     for request in sdk_requests:
         payload = json.loads(request.content)
         assert payload["model"] == "test-model"
-        assert payload["store"] is False
+        assert payload["store"] is True
         assert payload["instructions"] == DEFAULT_INSTRUCTIONS
         assert payload["conversation"] == "conv_integration"
         assert payload["context_management"] == [

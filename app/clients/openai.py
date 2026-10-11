@@ -165,7 +165,7 @@ class OpenAIClient:
                             if conversation_id is not None
                             else None
                         ),
-                        store=False,
+                        store=conversation_id is not None,
                     )
                 except (APIConnectionError, APIStatusError) as exc:
                     if attempt == self.max_retries or not self._should_retry(

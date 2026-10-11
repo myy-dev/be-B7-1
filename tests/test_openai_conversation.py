@@ -158,7 +158,7 @@ def test_same_conversation_receives_only_new_question_and_compaction(
         payload = json.loads(request.content)
         assert payload["model"] == "test-model"
         assert payload["instructions"] == DEFAULT_INSTRUCTIONS
-        assert payload["store"] is False
+        assert payload["store"] is True
         assert payload["conversation"] == "conv_test"
         assert payload["input"] == [{"role": "user", "content": question}]
         assert payload["context_management"] == [

@@ -254,7 +254,7 @@ def test_conversation_created_once_reused_across_restart_and_separate_rooms(
                 assert payload["context_management"] == [
                     {"type": "compaction", "compact_threshold": 20_000}
                 ]
-                assert payload["store"] is False
+                assert payload["store"] is True
 
         async with _conversation_app(tmp_path, monkeypatch) as restarted:
             resumed = await restarted.client.post(
