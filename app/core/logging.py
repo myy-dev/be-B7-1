@@ -42,12 +42,14 @@ class EventLogFormatter(logging.Formatter):
         }
         for name in (
             "request_id",
+            "method",
+            "path",
             "user_id",
             "chat_id",
             "result",
             "error_code",
             "duration_ms",
-            "http_status",
+            "status_code",
             "exception_type",
         ):
             fields[name] = getattr(record, name, None)
@@ -94,12 +96,14 @@ def log_event(
     event: LogEvent,
     *,
     request_id: UUID | None = None,
+    method: str | None = None,
+    path: str | None = None,
     user_id: str | None = None,
     chat_id: UUID | None = None,
     result: Literal["success", "failure"] | None = None,
     error_code: str | None = None,
     duration_ms: float | None = None,
-    http_status: int | None = None,
+    status_code: int | None = None,
     exception_type: str | None = None,
 ) -> None:
     """현재 요청의 식별자로 처리 이벤트를 기록한다.
@@ -116,17 +120,27 @@ def log_event(
         exception_type: 원문을 제외한 예외 클래스 이름.
     """
     current_id = request_id or request_id_context.get()
+    if event in {"request_failed", "ai_call_failed", "db_save_failed"} or (
+        status_code is not None and status_code >= 500
+    ):
+        level = logging.ERROR
+    elif event == "user_login_failed":
+        level = logging.WARNING
+    else:
+        level = logging.INFO
     logging.getLogger("app.events").log(
-        logging.ERROR if result == "failure" else logging.INFO,
+        level,
         event,
         extra={
             "request_id": str(current_id) if current_id else None,
+            "method": method,
+            "path": path,
             "user_id": user_id,
             "chat_id": str(chat_id) if chat_id else None,
             "result": result,
             "error_code": error_code,
             "duration_ms": duration_ms,
-            "http_status": http_status,
+            "status_code": status_code,
             "exception_type": exception_type,
         },
     )

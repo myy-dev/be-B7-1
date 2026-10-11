@@ -1,6 +1,7 @@
 """격리한 SQLite에서 채팅 API의 저장·조회·소유권을 검증한다."""
 
 import asyncio
+import logging
 import subprocess
 import sys
 from collections.abc import AsyncGenerator, Iterator
@@ -28,7 +29,7 @@ from app.api.dependencies import get_ai_client, get_current_user_id
 from app.api.v1.router import api_router, health_router
 from app.clients.ai import AIClient
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
-from app.core.errors import APIError, configure_request_processing
+from app.core.errors import APIError, DatabaseSaveError, configure_request_processing
 from app.models.chat import Chat, ChatLog
 from app.models.user import User
 from app.repositories.chat_repository import ChatRepository
@@ -380,25 +381,85 @@ def test_invalid_chat_uuid_returns_input_error(chat_api: _ChatAPI, method: str) 
 
 
 @pytest.mark.parametrize(
-    ("method", "path"),
+    ("method", "path", "expected_event"),
     [
-        ("POST", "/api/v1/chats"),
-        ("GET", "/api/v1/chats"),
-        ("GET", "/api/v1/chats/00000000-0000-4000-8000-000000000001"),
-        ("DELETE", "/api/v1/chats/00000000-0000-4000-8000-000000000001"),
+        ("POST", "/api/v1/chats", "db_save_failed"),
+        ("GET", "/api/v1/chats", "api_error"),
+        ("GET", "/api/v1/chats/00000000-0000-4000-8000-000000000001", "api_error"),
+        (
+            "DELETE",
+            "/api/v1/chats/00000000-0000-4000-8000-000000000001",
+            "db_save_failed",
+        ),
     ],
 )
 def test_sql_failure_returns_database_error(
-    chat_api: _ChatAPI, method: str, path: str
+    chat_api: _ChatAPI, method: str, path: str, expected_event: str, monkeypatch, caplog
 ) -> None:
     """실제 조회·저장 SQL 실패를 공통 DB 오류로 변환한다."""
     chat_api.authenticate()
+    monkeypatch.setattr(logging.getLogger("app.events"), "handlers", [caplog.handler])
+    caplog.set_level(logging.INFO, logger="app.events")
     chat_api.drop_tables()
     response = chat_api.client.request(method, path)
     _assert_error(response, 500, "DB_ERROR")
     assert "no such table" not in response.text
     assert "SELECT" not in response.text
     assert "INSERT" not in response.text
+    failures = [
+        record
+        for record in caplog.records
+        if record.getMessage() in {"api_error", "db_save_failed"}
+    ]
+    assert len(failures) == 1
+    failure = failures[0]
+    assert failure.getMessage() == expected_event
+    assert failure.levelname == "ERROR"
+    assert failure.error_code == "DB_ERROR"
+    assert failure.exception_type == "OperationalError"
+    assert failure.request_id == response.headers["X-Request-ID"]
+    assert failure.method == method
+    assert failure.path == path
+    assert "no such table" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("method", "repository_method"),
+    [
+        ("GET", "list_messages"),
+        ("POST", "get_by_id_and_user"),
+        ("POST", "list_recent_completed"),
+    ],
+)
+def test_chat_read_failure_is_not_save_failure(
+    chat_api: _ChatAPI, method: str, repository_method: str, monkeypatch, caplog
+) -> None:
+    """대화 조회 및 질문 전송 중 조회 실패를 저장 실패로 기록하지 않는다."""
+    chat_api.authenticate()
+    ai = _mock_ai(chat_api)
+    chat_id = chat_api.client.post("/api/v1/chats").json()["chat_id"]
+    monkeypatch.setattr(logging.getLogger("app.events"), "handlers", [caplog.handler])
+    caplog.set_level(logging.INFO, logger="app.events")
+    caplog.clear()
+
+    async def fail_read(repository: ChatRepository, *args: object) -> None:
+        raise OperationalError("hidden sql", {}, Exception("hidden error"))
+
+    monkeypatch.setattr(ChatRepository, repository_method, fail_read)
+    path = f"/api/v1/chats/{chat_id}"
+    if method == "POST":
+        response = chat_api.client.post(path + "/messages", json={"question": "질문"})
+    else:
+        response = chat_api.client.get(path)
+    _assert_error(response, 500, "DB_ERROR")
+    failures = [r for r in caplog.records if r.getMessage() == "api_error"]
+    assert len(failures) == 1
+    assert failures[0].request_id == response.headers["X-Request-ID"]
+    assert failures[0].exception_type == "OperationalError"
+    assert failures[0].levelname == "ERROR"
+    assert not any(r.getMessage() == "db_save_failed" for r in caplog.records)
+    assert "hidden" not in response.text + caplog.text
+    ai.generate_answer.assert_not_awaited()
 
 
 def test_create_failure_rolls_back_session(chat_api: _ChatAPI) -> None:
@@ -407,8 +468,9 @@ def test_create_failure_rolls_back_session(chat_api: _ChatAPI) -> None:
     async def create_after_failure() -> UUID:
         async with chat_api.sessions() as session:
             repository = ChatRepository(session)
-            with pytest.raises(IntegrityError):
+            with pytest.raises(DatabaseSaveError) as caught:
                 await repository.create(None)  # type: ignore[arg-type]
+            assert isinstance(caught.value.original, IntegrityError)
             chat = await repository.create(chat_api.user_id)
             return chat.chat_id
 
@@ -849,6 +911,7 @@ def test_question_or_answer_save_failure_never_returns_success(
     monkeypatch: pytest.MonkeyPatch,
     failure_at: int,
     ai_failure: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """질문 저장 실패는 AI 호출을 막고 답변 저장 실패는 성공을 반환하지 않는다."""
     chat_api.authenticate()
@@ -856,22 +919,32 @@ def test_question_or_answer_save_failure_never_returns_success(
     if ai_failure:
         ai.generate_answer.side_effect = APIError("AI_UNAVAILABLE")
     chat_id = chat_api.client.post("/api/v1/chats").json()["chat_id"]
-    original = ChatRepository.save_message
+    original = AsyncSession.commit
     calls = 0
+    monkeypatch.setattr(logging.getLogger("app.events"), "handlers", [caplog.handler])
+    caplog.set_level(logging.INFO, logger="app.events")
+    caplog.clear()
 
-    async def fail_save(repository: ChatRepository, message: ChatLog) -> ChatLog:
+    async def fail_commit(session: AsyncSession) -> None:
         nonlocal calls
         calls += 1
         if calls == failure_at:
             raise OperationalError("hidden sql", {}, Exception("hidden error"))
-        return await original(repository, message)
+        await original(session)
 
-    monkeypatch.setattr(ChatRepository, "save_message", fail_save)
+    monkeypatch.setattr(AsyncSession, "commit", fail_commit)
     response = chat_api.client.post(
         f"/api/v1/chats/{chat_id}/messages", json={"question": "질문"}
     )
     _assert_error(response, 500, "DB_ERROR")
     assert ai.generate_answer.await_count == failure_at - 1
+    failures = [r for r in caplog.records if r.getMessage() == "db_save_failed"]
+    assert len(failures) == 1
+    assert failures[0].exception_type == "OperationalError"
+    assert failures[0].request_id == response.headers["X-Request-ID"]
+    assert failures[0].levelname == "ERROR"
+    assert not any(r.getMessage() == "api_error" for r in caplog.records)
+    assert "hidden" not in response.text + caplog.text
     saved = _messages(chat_api)
     if failure_at == 1:
         assert saved == []

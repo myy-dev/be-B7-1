@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import subprocess
 import sys
@@ -19,6 +20,26 @@ from tests.test_auth_api import signup_db as _signup_db
 signup_db = _signup_db
 
 SECRET = "test-only-secret-key-for-login-tests-12345678901234567890"
+
+
+def test_failed_login_logs_warning_and_completed_info(signup_db, monkeypatch, caplog):
+    """실제 로그인 실패는 WARNING, 해당 요청 완료는 INFO로 기록한다."""
+    logger = logging.getLogger("app.events")
+    monkeypatch.setattr(logger, "handlers", [caplog.handler])
+    caplog.set_level(logging.INFO, logger="app.events")
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": "missing_user", "password": "wrong-password"},
+    )
+    assert response.status_code == 401
+    records = [r for r in caplog.records if r.name == "app.events"]
+    assert [(r.getMessage(), r.levelname) for r in records] == [
+        ("request_received", "INFO"),
+        ("user_login_failed", "WARNING"),
+        ("request_completed", "INFO"),
+    ]
+    assert all(r.request_id == response.headers["X-Request-ID"] for r in records)
 
 
 def test_member_events_distinguish_outcomes(signup_db, monkeypatch):
@@ -49,7 +70,7 @@ def test_member_events_distinguish_outcomes(signup_db, monkeypatch):
                 "user_id": user_id if username == PAYLOAD["username"] else None,
                 "result": "failure",
                 "error_code": "INVALID_CREDENTIALS",
-                "http_status": 401,
+                "status_code": 401,
             },
         )
 

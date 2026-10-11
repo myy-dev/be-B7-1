@@ -6,7 +6,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class RoleUpdateRequest(BaseModel):
@@ -59,4 +59,9 @@ class SystemLogItem(BaseModel):
     level: str
     event: str
     request_id: str | None = None
+    method: str | None = None
+    path: str | None = None
+    status_code: int | None = Field(
+        default=None, validation_alias=AliasChoices("status_code", "http_status")
+    )
     user_id: int | None = None

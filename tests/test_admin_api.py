@@ -278,9 +278,10 @@ def sample_log_file(tmp_path):
     path = tmp_path / "system.jsonl"
     path.write_text(
         '{"timestamp":"2026-09-30T05:00:00Z","level":"INFO",'
-        '"event":"ai_call_started","user_id":7}\n'
+        '"event":"ai_call_started","user_id":7,'
+        '"method":"POST","path":"/api/v1/chat","status_code":200}\n'
         '{"timestamp":"2026-09-30T06:00:00Z","level":"ERROR",'
-        '"event":"ai_call_failed","user_id":7}\n'
+        '"event":"ai_call_failed","user_id":7,"http_status":503}\n'
         '{"timestamp":"2026-09-30T07:00:00Z","level":"INFO",'
         '"event":"db_save_succeeded","user_id":8}\n'
         "not-json-line\n",
@@ -324,6 +325,10 @@ def test_system_logs_read_from_file_with_event_filter(file_client):
     assert body["total"] == 1
     assert body["items"][0]["event"] == "ai_call_started"
     assert body["items"][0]["user_id"] == 7
+    assert body["items"][0]["method"] == "POST"
+    assert body["items"][0]["path"] == "/api/v1/chat"
+    assert body["items"][0]["status_code"] == 200
+    assert "http_status" not in body["items"][0]
     assert "_ts" not in body["items"][0]
 
 
@@ -332,6 +337,31 @@ def test_system_logs_sorted_newest_first(file_client):
     body = file_client.get("/api/v1/admin/system-logs").json()
     events = [item["event"] for item in body["items"]]
     assert events == ["db_save_succeeded", "ai_call_failed", "ai_call_started"]
+    assert body["items"][0]["method"] is None
+    assert body["items"][0]["path"] is None
+    assert [item["status_code"] for item in body["items"]] == [None, 503, 200]
+    assert all("http_status" not in item for item in body["items"])
+
+
+@pytest.mark.parametrize("status_code", [201, None])
+def test_system_logs_prefer_status_code(file_client, sample_log_file, status_code):
+    """두 상태 키가 있으면 새 키를 우선하며 원본 파일을 유지한다."""
+    content = json.dumps(
+        {
+            "timestamp": "2026-09-30T08:00:00Z",
+            "level": "INFO",
+            "event": "request_completed",
+            "status_code": status_code,
+            "http_status": 500,
+        }
+    ) + "\n"
+    sample_log_file.write_text(content, encoding="utf-8")
+    response = file_client.get("/api/v1/admin/system-logs")
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["status_code"] == status_code
+    assert "http_status" not in item
+    assert sample_log_file.read_text(encoding="utf-8") == content
 
 
 @pytest.mark.parametrize(

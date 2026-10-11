@@ -45,7 +45,7 @@ class AuthService:
                 user_id=str(user.id) if user else None,
                 result="failure",
                 error_code="INVALID_CREDENTIALS",
-                http_status=401,
+                status_code=401,
             )
             raise AppError(
                 "INVALID_CREDENTIALS", "아이디 또는 비밀번호가 올바르지 않습니다.", 401
