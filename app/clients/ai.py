@@ -32,6 +32,8 @@ DEFAULT_INSTRUCTIONS = (
 class AIClient(Protocol):
     """AI 답변 생성과 자원 정리의 공통 계약을 정의한다."""
 
+    model: str
+
     async def generate_answer(
         self, question: str, history: list[tuple[str, str]]
     ) -> str:
