@@ -69,3 +69,16 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class MyInfoResponse(BaseModel):
+    """비밀번호 정보를 제외한 현재 로그인 회원의 정보."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    name: str
+    role: str
+    created_at: UtcDateTime
+    last_login_at: UtcDateTime | None

@@ -45,7 +45,8 @@ async def require_admin(
         raise unauthorized
     if role != "admin":
         raise forbidden
-    return {"role": "admin", "mock": False}
+    # user_id는 역할 변경 API의 본인 강등 가드가 쓴다.
+    return {"role": "admin", "mock": False, "user_id": user_id}
 
 
 def get_admin_service(db: DBSession) -> AdminService:

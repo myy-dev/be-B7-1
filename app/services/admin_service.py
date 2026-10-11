@@ -40,6 +40,28 @@ class AdminService:
             )
         return user
 
+    async def update_role(
+        self, user_id: int, role: str, caller_id: int | None = None
+    ) -> dict:
+        if role not in ("admin", "user"):
+            raise AppError(
+                "INVALID_ROLE",
+                "역할은 admin 또는 user만 지정할 수 있습니다.",
+                422,
+            )
+        if caller_id is not None and user_id == caller_id and role != "admin":
+            raise AppError(
+                "CANNOT_DEMOTE_SELF",
+                "자기 자신의 관리자 권한은 해제할 수 없습니다.",
+                403,
+            )
+        updated = await self.users.update_role(user_id, role)
+        if updated is None:
+            raise AppError(
+                "USER_NOT_FOUND", "회원을 찾을 수 없습니다.", status_code=404
+            )
+        return updated
+
     async def list_logs(
         self,
         user_id: int | None,

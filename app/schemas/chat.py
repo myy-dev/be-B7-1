@@ -25,9 +25,10 @@ class MessageCreateRequest(BaseModel):
         StringConstraints(
             strip_whitespace=True,
             min_length=1,
+            max_length=1000,
         ),
         Field(
-            description="AI에게 전달할 질문. 앞뒤 공백 제거 후 최소 1자",
+            description="AI에게 전달할 질문. 앞뒤 공백 제거 후 1~1,000자",
             examples=["FastAPI가 뭐야?"],
         ),
     ]

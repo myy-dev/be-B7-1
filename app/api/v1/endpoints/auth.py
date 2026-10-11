@@ -5,14 +5,17 @@ from fastapi import APIRouter, Depends, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import CurrentUserId, DBSession, bearer
+from app.api.dependencies import CurrentUser, CurrentUserId, DBSession, bearer
+from app.api.error_responses import DB_ERROR_RESPONSE, error_response
 from app.core.database import get_db
+from app.core.errors import APIError
 from app.core.security import decode_access_token_claims
 from app.repositories.token_repository import TokenRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
+    MyInfoResponse,
     SignupRequest,
     SignupResponse,
 )
@@ -44,6 +47,17 @@ async def login(
     service: Annotated[AuthService, Depends(get_auth_service)],
 ):
     return await service.login(data)
+
+
+@router.get(
+    "/me",
+    response_model=MyInfoResponse,
+    summary="내정보 조회",
+    responses={401: error_response(APIError("UNAUTHORIZED")), 500: DB_ERROR_RESPONSE},
+)
+async def get_my_info(user: CurrentUser):
+    """Bearer 토큰으로 인증된 회원의 정보를 반환한다."""
+    return user
 
 
 # 로그아웃 API 구현: 현재 액세스 토큰을 폐기해 이후 요청에서 사용할 수 없게 한다.

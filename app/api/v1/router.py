@@ -2,8 +2,8 @@ from fastapi import APIRouter
 from sqlalchemy import text
 
 from app.api.dependencies import DBSession
-from app.api.v1.admin import router as admin_router
-from app.api.v1.auth import router as auth_router
+from app.api.v1.endpoints.admin import router as admin_router
+from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.chat import router as chat_router
 
 # 버전 접두어(/api/v1) 아래로 모을 API. main.py에서 prefix를 붙여 등록한다.

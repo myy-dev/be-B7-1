@@ -22,7 +22,7 @@ from app.core.errors import (
     APIError,
     configure_request_processing,
 )
-from app.core.logging import EventLogFormatter, configure_logging, log_event
+from app.core.logging import EventLogFormatter, LogEvent, configure_logging, log_event
 from app.core.request_context import request_id_context
 from app.schemas.error import ErrorCode
 
@@ -109,6 +109,35 @@ def event_logs(
     return caplog
 
 
+@pytest.mark.parametrize(
+    ("event", "status_code", "expected_level"),
+    [
+        ("user_login_failed", 401, "WARNING"),
+        ("user_login_failed", 500, "ERROR"),
+        ("request_failed", None, "ERROR"),
+        ("ai_call_failed", None, "ERROR"),
+        ("db_save_failed", None, "ERROR"),
+        ("api_error", 403, "INFO"),
+        ("api_error", 429, "INFO"),
+        ("api_error", 499, "INFO"),
+        ("api_error", 500, "ERROR"),
+        ("request_completed", 401, "INFO"),
+        ("request_completed", 503, "ERROR"),
+    ],
+)
+def test_event_levels_distinguish_warnings_and_failures(
+    event_logs: pytest.LogCaptureFixture,
+    event: LogEvent,
+    status_code: int | None,
+    expected_level: str,
+) -> None:
+    """ログイン失敗と障害を区別し、failureだけではERRORにしない。"""
+    log_event(event, status_code=status_code, result="failure")
+    record = json.loads(EventLogFormatter().format(event_logs.records[-1]))
+    assert record["level"] == expected_level
+    assert record["result"] == "failure"
+
+
 def test_events_are_written_to_configured_jsonl(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -122,8 +151,11 @@ def test_events_are_written_to_configured_jsonl(
     log_event(
         "ai_call_failed",
         request_id=request_id,
+        method="POST",
+        path="/api/v1/chat",
         user_id="7",
         error_code="AI_UNAVAILABLE",
+        status_code=503,
         result="failure",
     )
     for handler in logger.handlers:
@@ -132,8 +164,12 @@ def test_events_are_written_to_configured_jsonl(
     record = json.loads(log_path.read_text(encoding="utf-8").strip())
     assert record["event"] == "ai_call_failed"
     assert record["request_id"] == str(request_id)
+    assert record["method"] == "POST"
+    assert record["path"] == "/api/v1/chat"
     assert record["user_id"] == "7"
     assert record["error_code"] == "AI_UNAVAILABLE"
+    assert record["status_code"] == 503
+    assert "http_status" not in record
     for handler in logger.handlers:
         handler.close()
 
@@ -153,6 +189,14 @@ def test_server_generates_unique_request_ids(
     assert request_id != second.json()["request_id"]
     ids = {record.request_id for record in event_logs.records}
     assert ids == {request_id, second.json()["request_id"]}
+    request_logs = [
+        record
+        for record in event_logs.records
+        if record.getMessage() in {"request_received", "request_completed"}
+    ]
+    assert len(request_logs) == 4
+    assert all(record.method == "GET" for record in request_logs)
+    assert all(record.path == "/identity" for record in request_logs)
 
 
 @pytest.mark.parametrize(("code", "status_code"), ERROR_STATUS_CODES.items())
@@ -163,7 +207,7 @@ def test_specified_errors_share_response_and_log_id(
     status_code: int,
 ) -> None:
     """명세의 모든 오류가 올바른 상태와 동일한 요청 ID를 사용한다."""
-    response = client.get(f"/error/{code}")
+    response = client.get(f"/error/{code}?search=private-query")
     error = response.json()["error"]
     assert response.status_code == status_code
     assert set(error) == {"code", "message", "request_id"}
@@ -171,6 +215,17 @@ def test_specified_errors_share_response_and_log_id(
     assert error["request_id"] == response.headers["X-Request-ID"]
     assert UUID(error["request_id"]).version == 4
     assert event_logs.records
+    assert all(record.method == "GET" for record in event_logs.records)
+    assert all(record.path == f"/error/{code}" for record in event_logs.records)
+    assert "private-query" not in event_logs.text
+    assert event_logs.records[-1].status_code == status_code
+    assert event_logs.records[-1].levelname == (
+        "ERROR" if status_code >= 500 else "INFO"
+    )
+    assert all(
+        "http_status" not in json.loads(EventLogFormatter().format(record))
+        for record in event_logs.records
+    )
     assert all(
         record.request_id == error["request_id"] for record in event_logs.records
     )
@@ -197,6 +252,12 @@ def test_validation_errors_do_not_expose_input(
     assert "private question" not in response.text
     assert "private question" not in event_logs.text
     assert response.json()["error"]["request_id"] == response.headers["X-Request-ID"]
+    assert all(
+        record.method == response.request.method for record in event_logs.records
+    )
+    assert all(
+        record.path == response.request.url.path for record in event_logs.records
+    )
 
 
 def test_auth_error_keeps_challenge_header(
@@ -222,7 +283,8 @@ def test_database_error_redacts_sql_and_parameters(
     rendered = "\n".join(formatter.format(record) for record in event_logs.records)
     assert "private" not in response.text + rendered
     failed = [json.loads(line) for line in rendered.splitlines()]
-    assert any(item["event"] == "db_save_failed" for item in failed)
+    assert any(item["event"] == "api_error" for item in failed)
+    assert all(item["event"] != "db_save_failed" for item in failed)
 
 
 def test_unexpected_error_is_logged_and_reraised(
@@ -233,6 +295,9 @@ def test_unexpected_error_is_logged_and_reraised(
         client.get("/unexpected-error")
     assert event_logs.records[-1].getMessage() == "request_failed"
     assert event_logs.records[-1].exception_type == "RuntimeError"
+    assert event_logs.records[-1].status_code == 500
+    assert all(record.method == "GET" for record in event_logs.records)
+    assert all(record.path == "/unexpected-error" for record in event_logs.records)
     assert "private runtime detail" not in event_logs.text
 
 
