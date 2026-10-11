@@ -237,6 +237,9 @@ pyrightconfig.json
 AGENTS.md
 docs/PROGRESS.md
 
+# Local development planning documents
+/docs/PRD/
+
 # Runtime system logs
 /logs/
 

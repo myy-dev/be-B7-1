@@ -107,7 +107,17 @@ Uvicorn 실행·접근 로그와 앱 이벤트를 확인합니다. 이벤트는 
 tail -n 50 logs/system.jsonl
 ```
 
-이벤트·필드·관리자 조회 규칙은 [로그 계약](PRD/system-logs.md)을 따릅니다. AI 이벤트는 호출 전체의 시작·최종 결과이며 개별 재시도는 기록하지 않습니다.
+| 영역 | 이벤트 |
+| --- | --- |
+| 요청 | `request_received`, `request_completed`, `request_failed` |
+| 공통 오류 | `api_error` |
+| AI 호출 | `ai_call_started`, `ai_call_succeeded`, `ai_call_failed` |
+| DB 저장 | `db_save_succeeded`, `db_save_failed` |
+| 회원 | `user_signed_up`, `user_logged_in`, `user_login_failed` |
+
+AI 이벤트는 호출 전체의 시작·최종 결과이며 개별 재시도는 기록하지 않습니다. `request_failed`·`ai_call_failed`·`db_save_failed` 또는 상태 코드 500 이상은 `ERROR`, 그 외 로그인 실패는 `WARNING`, 나머지는 `INFO`입니다.
+
+기본 필드는 `timestamp`(UTC)·`level`·`event`·`request_id`·`user_id`·`method`·`path`·`status_code`입니다. 경로에는 쿼리 문자열을 포함하지 않으며 인증 전 사용자 ID는 null입니다. 파일에는 `chat_id`·`result`·`error_code`·`duration_ms`·`exception_type`도 기록합니다. 질문·답변 원문, 비밀번호, 토큰, API 키와 스택 트레이스는 기록하지 않습니다.
 
 응답의 `X-Request-ID` 또는 오류 본문 `request_id`로 요청을 추적합니다.
 
@@ -115,7 +125,9 @@ tail -n 50 logs/system.jsonl
 rg -F '응답에서 확인한-request-id' logs/system.jsonl
 ```
 
-파일 쓰기 오류는 stderr에 표시될 수 있고, 시작 시 경로 생성·파일 열기 실패는 앱 시작을 막을 수 있습니다. 권한·디스크를 확인하고 로그 로테이션·보관 기간은 별도 설정합니다. 관리자 `/api/v1/admin/system-logs`는 유효한 줄의 일부 메타데이터만 반환합니다.
+관리자 `/api/v1/admin/system-logs`는 이벤트·레벨·기간으로 유효한 줄을 필터링해 최신순으로 기본 필드를 반환합니다. 파일의 사용자 ID는 문자열, 관리자 응답은 정수입니다. 기존 `http_status`는 `status_code`로 읽으며 두 값이 있으면 새 필드를 우선합니다. 잘못된 JSON·필드·시각은 조회에서 제외하며 원본 파일은 수정하지 않습니다.
+
+파일 쓰기 오류는 stderr에 표시될 수 있고, 시작 시 경로 생성·파일 열기 실패는 앱 시작을 막을 수 있습니다. 권한·디스크를 확인하고 로그 로테이션·보관 기간은 별도 설정합니다.
 
 ## 공통 오류 처리
 
