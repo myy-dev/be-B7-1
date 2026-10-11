@@ -6,13 +6,24 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
+
+
+class RoleUpdateRequest(BaseModel):
+    role: str = Field(min_length=1, max_length=20)
+
+
+class RoleUpdateResponse(BaseModel):
+    id: int
+    username: str
+    role: str
 
 
 class UserSummary(BaseModel):
     id: int
     username: str
     name: str
+    role: str
     created_at: datetime
 
 
@@ -48,4 +59,9 @@ class SystemLogItem(BaseModel):
     level: str
     event: str
     request_id: str | None = None
+    method: str | None = None
+    path: str | None = None
+    status_code: int | None = Field(
+        default=None, validation_alias=AliasChoices("status_code", "http_status")
+    )
     user_id: int | None = None

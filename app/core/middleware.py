@@ -1,5 +1,3 @@
-"""HTTP 요청마다 UUID4 식별자와 처리 이벤트를 생성한다."""
-
 from time import perf_counter
 from uuid import uuid4
 
@@ -37,7 +35,7 @@ class RequestContextMiddleware:
         token = request_id_context.set(request_id)
         started_at = perf_counter()
         status_code = 500
-        log_event("request_received")
+        log_event("request_received", method=scope["method"], path=scope["path"])
 
         async def send_response(message: Message) -> None:
             nonlocal status_code
@@ -57,11 +55,13 @@ class RequestContextMiddleware:
         except Exception as exc:
             log_event(
                 "request_failed",
+                method=scope["method"],
+                path=scope["path"],
                 user_id=_user_id(scope),
                 chat_id=scope["state"].get("chat_id"),
                 result="failure",
                 error_code="INTERNAL_ERROR",
-                http_status=500,
+                status_code=500,
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
                 exception_type=type(exc).__name__,
             )
@@ -69,12 +69,14 @@ class RequestContextMiddleware:
         else:
             log_event(
                 "request_completed",
+                method=scope["method"],
+                path=scope["path"],
                 user_id=_user_id(scope),
                 chat_id=scope["state"].get("chat_id"),
                 result="success" if status_code < 400 else "failure",
                 error_code=scope["state"].get("error_code"),
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
-                http_status=status_code,
+                status_code=status_code,
             )
         finally:
             request_id_context.reset(token)

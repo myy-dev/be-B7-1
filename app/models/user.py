@@ -6,7 +6,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
 
-# 회원 모델: 아이디·비밀번호 해시·이름·권한·가입 시각·마지막 로그인 시각을 저장한다.
 class User(Base):
     __tablename__ = "users"
 

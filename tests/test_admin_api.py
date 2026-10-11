@@ -27,16 +27,16 @@ async def _admin_override() -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _clear_auth_settings_cache(monkeypatch):
-    # AuthSettings가 lru_cache라 테스트 키가 실제 환경 키에 가려지지 않게 비운다.
-    from app.core.config import get_auth_settings
+def _clear_settings_cache(monkeypatch):
+    # Settings가 lru_cache라 테스트 키가 실제 환경 키에 가려지지 않게 비운다.
+    from app.core.config import get_settings
 
     monkeypatch.setenv(
         "JWT_SECRET_KEY", "test-only-secret-key-for-admin-tests-1234567890"
     )
-    get_auth_settings.cache_clear()
+    get_settings.cache_clear()
     yield
-    get_auth_settings.cache_clear()
+    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -204,6 +204,26 @@ def test_get_user_not_found_returns_standard_error(db_client):
     assert isinstance(error["request_id"], str) and error["request_id"]
 
 
+def test_update_role_promotes_user(db_client):
+    # user → admin 승격이 200과 변경된 역할로 오는지 확인한다.
+    res = db_client.patch("/api/v1/admin/users/2/role", json={"role": "admin"})
+    assert res.status_code == 200
+    assert res.json() == {"id": 2, "username": "user_b", "role": "admin"}
+
+
+def test_update_role_rejects_invalid_role(db_client):
+    # admin·user가 아니면 422와 공통 오류 형식으로 거절하는지 확인한다.
+    res = db_client.patch("/api/v1/admin/users/2/role", json={"role": "owner"})
+    assert res.status_code == 422
+
+
+def test_update_role_not_found(db_client):
+    # 없는 회원은 404와 공통 오류 형식으로 오는지 확인한다.
+    res = db_client.patch("/api/v1/admin/users/9999/role", json={"role": "admin"})
+    assert res.status_code == 404
+    assert res.json()["error"]["code"] == "USER_NOT_FOUND"
+
+
 def test_list_logs_filters_by_user(db_client):
     # 대화 기록이 그 회원 소유 세션으로 걸러지는지 확인한다(기록은 chat_id로 묶임).
     res = db_client.get("/api/v1/admin/logs", params={"user_id": 1})
@@ -258,9 +278,10 @@ def sample_log_file(tmp_path):
     path = tmp_path / "system.jsonl"
     path.write_text(
         '{"timestamp":"2026-09-30T05:00:00Z","level":"INFO",'
-        '"event":"ai_call_started","user_id":7}\n'
+        '"event":"ai_call_started","user_id":7,'
+        '"method":"POST","path":"/api/v1/chat","status_code":200}\n'
         '{"timestamp":"2026-09-30T06:00:00Z","level":"ERROR",'
-        '"event":"ai_call_failed","user_id":7}\n'
+        '"event":"ai_call_failed","user_id":7,"http_status":503}\n'
         '{"timestamp":"2026-09-30T07:00:00Z","level":"INFO",'
         '"event":"db_save_succeeded","user_id":8}\n'
         "not-json-line\n",
@@ -304,6 +325,10 @@ def test_system_logs_read_from_file_with_event_filter(file_client):
     assert body["total"] == 1
     assert body["items"][0]["event"] == "ai_call_started"
     assert body["items"][0]["user_id"] == 7
+    assert body["items"][0]["method"] == "POST"
+    assert body["items"][0]["path"] == "/api/v1/chat"
+    assert body["items"][0]["status_code"] == 200
+    assert "http_status" not in body["items"][0]
     assert "_ts" not in body["items"][0]
 
 
@@ -312,6 +337,31 @@ def test_system_logs_sorted_newest_first(file_client):
     body = file_client.get("/api/v1/admin/system-logs").json()
     events = [item["event"] for item in body["items"]]
     assert events == ["db_save_succeeded", "ai_call_failed", "ai_call_started"]
+    assert body["items"][0]["method"] is None
+    assert body["items"][0]["path"] is None
+    assert [item["status_code"] for item in body["items"]] == [None, 503, 200]
+    assert all("http_status" not in item for item in body["items"])
+
+
+@pytest.mark.parametrize("status_code", [201, None])
+def test_system_logs_prefer_status_code(file_client, sample_log_file, status_code):
+    """두 상태 키가 있으면 새 키를 우선하며 원본 파일을 유지한다."""
+    content = json.dumps(
+        {
+            "timestamp": "2026-09-30T08:00:00Z",
+            "level": "INFO",
+            "event": "request_completed",
+            "status_code": status_code,
+            "http_status": 500,
+        }
+    ) + "\n"
+    sample_log_file.write_text(content, encoding="utf-8")
+    response = file_client.get("/api/v1/admin/system-logs")
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["status_code"] == status_code
+    assert "http_status" not in item
+    assert sample_log_file.read_text(encoding="utf-8") == content
 
 
 @pytest.mark.parametrize(
@@ -514,6 +564,7 @@ def test_cors_config_loads_comma_separated_environment(
     from app.core.config import Settings
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-only-cors-secret-at-least-32-characters")
     monkeypatch.setenv("CORS_ORIGINS", "http://localhost:5173, http://127.0.0.1:5173, ")
     settings = Settings(_env_file=None)
     assert settings.cors_origins == [

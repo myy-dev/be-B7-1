@@ -20,7 +20,7 @@ from app.schemas.error import ErrorResponse
 
 
 def _response_examples() -> list[tuple[type[BaseModel], dict[str, object]]]:
-    api_path = Path(__file__).resolve().parents[1] / "docs/PRD/AI-CHAT-API.md"
+    api_path = Path(__file__).resolve().parents[1] / "docs/PRD/chat-spec.md"
     examples = re.findall(r"```json\n(.*?)\n```", api_path.read_text(), re.S)
     responses: list[tuple[type[BaseModel], dict[str, object]]] = []
     for example in examples:
@@ -130,6 +130,62 @@ def test_question_is_trimmed_without_changing_content() -> None:
     """앞뒤 공백은 제거하고 질문 본문의 공백과 개행은 유지한다."""
     request = MessageCreateRequest(question=" \t FastAPI  질문\n두 번째 줄 \n")
     assert request.question == "FastAPI  질문\n두 번째 줄"
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("가", "가"),
+        ("가" * 1000, "가" * 1000),
+        (" \t" + "가" * 1000 + "\n\u2003", "가" * 1000),
+        ("가" * 499 + " \n" + "나" * 499, "가" * 499 + " \n" + "나" * 499),
+        ("😀" * 1000, "😀" * 1000),
+        ("👩‍💻" * 333 + "가", "👩‍💻" * 333 + "가"),
+        ("가" * 500, "가" * 500),
+    ],
+    ids=[
+        "minimum",
+        "maximum",
+        "trim-before-length-check",
+        "internal-whitespace",
+        "emoji-code-points",
+        "combined-emoji",
+        "no-unicode-normalization",
+    ],
+)
+def test_question_length_accepts_boundaries_and_preserves_content(
+    question: str, expected: str
+) -> None:
+    """길이 경계값을 허용하고 앞뒤 공백 외의 문자와 내부 공백은 유지한다."""
+    assert MessageCreateRequest(question=question).question == expected
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "가" * 1001,
+        "  " + "가" * 1001 + "\n",
+        "가" * 500 + " " + "나" * 500,
+        "가" * 500 + "\n" + "나" * 500,
+        "😀" * 1001,
+        "👩‍💻" * 334,
+        "가" * 501,
+    ],
+    ids=[
+        "over-maximum",
+        "over-maximum-after-trim",
+        "internal-space-counts",
+        "internal-newline-counts",
+        "emoji-over-maximum",
+        "combined-emoji-over-maximum",
+        "decomposed-hangul-over-maximum",
+    ],
+)
+def test_question_over_length_limit_is_rejected(question: str) -> None:
+    """내부 공백과 Unicode 코드 포인트를 포함해 1,000자 초과를 거절한다."""
+    with pytest.raises(ValidationError) as error:
+        MessageCreateRequest(question=question)
+    assert error.value.errors()[0]["type"] == "string_too_long"
 
 
 @pytest.mark.parametrize(
