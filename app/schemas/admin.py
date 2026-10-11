@@ -59,4 +59,6 @@ class SystemLogItem(BaseModel):
     level: str
     event: str
     request_id: str | None = None
+    method: str | None = None
+    path: str | None = None
     user_id: int | None = None

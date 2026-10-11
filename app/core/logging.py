@@ -42,6 +42,8 @@ class EventLogFormatter(logging.Formatter):
         }
         for name in (
             "request_id",
+            "method",
+            "path",
             "user_id",
             "chat_id",
             "result",
@@ -94,6 +96,8 @@ def log_event(
     event: LogEvent,
     *,
     request_id: UUID | None = None,
+    method: str | None = None,
+    path: str | None = None,
     user_id: str | None = None,
     chat_id: UUID | None = None,
     result: Literal["success", "failure"] | None = None,
@@ -121,6 +125,8 @@ def log_event(
         event,
         extra={
             "request_id": str(current_id) if current_id else None,
+            "method": method,
+            "path": path,
             "user_id": user_id,
             "chat_id": str(chat_id) if chat_id else None,
             "result": result,

@@ -188,6 +188,8 @@ def _error_response(
     log_event(
         "db_save_failed" if code == "DB_ERROR" else "api_error",
         request_id=request_id,
+        method=request.method,
+        path=request.scope["path"],
         result="failure",
         error_code=code,
         exception_type=exception_type,

@@ -35,7 +35,7 @@ class RequestContextMiddleware:
         token = request_id_context.set(request_id)
         started_at = perf_counter()
         status_code = 500
-        log_event("request_received")
+        log_event("request_received", method=scope["method"], path=scope["path"])
 
         async def send_response(message: Message) -> None:
             nonlocal status_code
@@ -55,6 +55,8 @@ class RequestContextMiddleware:
         except Exception as exc:
             log_event(
                 "request_failed",
+                method=scope["method"],
+                path=scope["path"],
                 user_id=_user_id(scope),
                 chat_id=scope["state"].get("chat_id"),
                 result="failure",
@@ -67,6 +69,8 @@ class RequestContextMiddleware:
         else:
             log_event(
                 "request_completed",
+                method=scope["method"],
+                path=scope["path"],
                 user_id=_user_id(scope),
                 chat_id=scope["state"].get("chat_id"),
                 result="success" if status_code < 400 else "failure",

@@ -278,7 +278,8 @@ def sample_log_file(tmp_path):
     path = tmp_path / "system.jsonl"
     path.write_text(
         '{"timestamp":"2026-09-30T05:00:00Z","level":"INFO",'
-        '"event":"ai_call_started","user_id":7}\n'
+        '"event":"ai_call_started","user_id":7,'
+        '"method":"POST","path":"/api/v1/chat"}\n'
         '{"timestamp":"2026-09-30T06:00:00Z","level":"ERROR",'
         '"event":"ai_call_failed","user_id":7}\n'
         '{"timestamp":"2026-09-30T07:00:00Z","level":"INFO",'
@@ -324,6 +325,8 @@ def test_system_logs_read_from_file_with_event_filter(file_client):
     assert body["total"] == 1
     assert body["items"][0]["event"] == "ai_call_started"
     assert body["items"][0]["user_id"] == 7
+    assert body["items"][0]["method"] == "POST"
+    assert body["items"][0]["path"] == "/api/v1/chat"
     assert "_ts" not in body["items"][0]
 
 
@@ -332,6 +335,8 @@ def test_system_logs_sorted_newest_first(file_client):
     body = file_client.get("/api/v1/admin/system-logs").json()
     events = [item["event"] for item in body["items"]]
     assert events == ["db_save_succeeded", "ai_call_failed", "ai_call_started"]
+    assert body["items"][0]["method"] is None
+    assert body["items"][0]["path"] is None
 
 
 @pytest.mark.parametrize(
