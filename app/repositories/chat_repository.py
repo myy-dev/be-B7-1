@@ -5,6 +5,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import DatabaseSaveError
 from app.models.chat import Chat, ChatLog
 
 
@@ -18,9 +19,9 @@ class ChatRepository:
         try:
             self.session.add(chat)
             await self.session.commit()
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
             await self.session.rollback()
-            raise
+            raise DatabaseSaveError(exc) from exc
         return chat
 
     async def list_by_user(self, user_id: int) -> list[Chat]:
@@ -64,9 +65,9 @@ class ChatRepository:
         try:
             self.session.add(message)
             await self.session.commit()
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
             await self.session.rollback()
-            raise
+            raise DatabaseSaveError(exc) from exc
         return message
 
     async def get_by_id_and_user(self, chat_id: UUID, user_id: int) -> Chat | None:
@@ -95,9 +96,9 @@ class ChatRepository:
                 .returning(Chat.chat_id)
             )
             await self.session.commit()
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
             await self.session.rollback()
-            raise
+            raise DatabaseSaveError(exc) from exc
         return deleted_id is not None
 
     async def list_messages(self, chat_id: UUID) -> list[ChatLog]:

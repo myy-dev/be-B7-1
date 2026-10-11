@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
-from app.core.logging import configure_logging, log_event
+from app.core.logging import LogEvent, configure_logging, log_event
 from app.core.middleware import RequestContextMiddleware
 from app.schemas.error import ErrorCode, ErrorResponse
 
@@ -41,6 +41,15 @@ ERROR_MESSAGES: dict[ErrorCode, str] = {
     "AI_CONFIGURATION_ERROR": "AI 서비스 설정을 확인해야 합니다.",
     "AI_TIMEOUT": "응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.",
 }
+
+
+class DatabaseSaveError(SQLAlchemyError):
+    """저장 처리에서 발생한 DB 오류를 원래 예외와 함께 전달한다."""
+
+    def __init__(self, original: SQLAlchemyError) -> None:
+        """원문을 메시지에 포함하지 않고 저장 실패의 원인을 보관한다."""
+        super().__init__("데이터 저장에 실패했습니다.")
+        self.original = original
 
 
 class AppError(Exception):
@@ -180,13 +189,14 @@ def _error_response(
     code: ErrorCode,
     *,
     exception_type: str,
+    event: LogEvent = "api_error",
     headers: dict[str, str] | None = None,
     message: str | None = None,
 ) -> JSONResponse:
     request_id = request.state.request_id
     content = error_body(request, code, message or ERROR_MESSAGES[code])
     log_event(
-        "db_save_failed" if code == "DB_ERROR" else "api_error",
+        event,
         request_id=request_id,
         method=request.method,
         path=request.scope["path"],
@@ -255,7 +265,14 @@ async def handle_database_error(request: Request, exc: Exception) -> JSONRespons
     """
     if not isinstance(exc, SQLAlchemyError):
         raise exc
-    return _error_response(request, "DB_ERROR", exception_type=type(exc).__name__)
+    is_save_error = isinstance(exc, DatabaseSaveError)
+    original = exc.original if isinstance(exc, DatabaseSaveError) else exc
+    return _error_response(
+        request,
+        "DB_ERROR",
+        exception_type=type(original).__name__,
+        event="db_save_failed" if is_save_error else "api_error",
+    )
 
 
 async def handle_http_error(request: Request, exc: Exception) -> Response:

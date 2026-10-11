@@ -283,7 +283,8 @@ def test_database_error_redacts_sql_and_parameters(
     rendered = "\n".join(formatter.format(record) for record in event_logs.records)
     assert "private" not in response.text + rendered
     failed = [json.loads(line) for line in rendered.splitlines()]
-    assert any(item["event"] == "db_save_failed" for item in failed)
+    assert any(item["event"] == "api_error" for item in failed)
+    assert all(item["event"] != "db_save_failed" for item in failed)
 
 
 def test_unexpected_error_is_logged_and_reraised(
