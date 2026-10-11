@@ -1,18 +1,29 @@
 # 아키텍처
 
+React 프론트는 FastAPI를 통해 인증·채팅 기능을 사용합니다. FastAPI는 SQLite에 회원·대화를 저장하고 OpenAI API로 답변을 생성합니다.
+
 ## 계층과 수명주기
 
 | 위치 | 책임 |
 | --- | --- |
 | `app/main.py` | 앱 설정, CORS, 시작·종료 처리 |
-| `app/api/` | 라우팅, 입력·응답 스키마 연결, 인증 의존성 |
-| `app/services/` | 소유권 확인, 회원·채팅·관리자 처리 |
-| `app/repositories/` | DB 트랜잭션과 조회, 시스템 로그 파일 조회 |
-| `app/models/`, `app/schemas/` | 저장 모델, 입력 검증·응답 계약 |
-| `app/clients/ai.py` | 비동기 AI 호출과 오류 변환 |
+| `app/api/` | 라우팅, 입력·응답 검증, 인증 |
+| `app/services/` | 회원·채팅·관리자 처리, 소유권 확인 |
+| `app/repositories/` | DB 조회·저장, 시스템 로그 조회 |
+| `app/models/`, `app/schemas/` | 저장 모델, 요청·응답 형식 |
+| `app/clients/ai.py` | AI 클라이언트 공통 계약 (`Protocol`) |
+| `app/clients/openai.py` | OpenAI 호출, 재시도·타임아웃, 오류 변환 |
 | `app/core/` | 환경 설정, DB, JWT, 요청 ID, 로그, 공통 오류 |
 
-앱 시작 시 `create_all`로 없는 테이블을 생성하고 AI 클라이언트를 한 번 생성해 공유합니다. 요청별 DB 세션을 사용하고 종료 시 AI 연결과 DB 엔진을 정리합니다. 스키마 변경 마이그레이션은 별도 구현되어 있지 않습니다.
+시작 시 `create_all`로 없는 테이블을 만들고 AI 클라이언트를 생성해 공유합니다. DB 세션은 요청마다 사용하며, 종료 시 AI 연결과 DB 엔진을 정리합니다. AI 초기화·종료 실패 시에도 DB 엔진을 정리합니다. `create_all`은 기존 스키마를 변경하지 않으며 별도 마이그레이션은 없습니다.
+
+## 인증과 데이터 소유권
+
+프론트는 로그인 토큰과 만료 시각을 탭의 `sessionStorage`에 보관하고 `Authorization: Bearer <access_token>`으로 요청합니다. 만료·인증 요청의 401 응답에서 인증 상태를 지우고, `/api/v1/auth/me`로 현재 회원의 DB 역할을 확인합니다.
+
+서버는 요청마다 JWT 서명·만료·폐기 여부와 회원 존재를 검사합니다. 관리자 API는 DB의 `role=admin`을 추가 확인하며 일반 회원은 `403 FORBIDDEN`입니다. 회원·토큰 처리는 [회원 인증](PRD/auth.md), 관리자 생성·역할 변경은 [관리자 기능](PRD/admin.md)을 참고합니다.
+
+채팅은 인증한 회원 ID와 `chats.user_id`가 일치하는 미삭제 방만 사용합니다. 본문의 사용자 ID로 소유자를 정하지 않으며, 타인 소유·삭제·없는 방은 모두 `404 CHAT_NOT_FOUND`입니다.
 
 ## 질문 처리 흐름
 
@@ -24,33 +35,31 @@ sequenceDiagram
     participant DB as SQLite
     participant AI as AIClient
     U->>API: POST /chats/{chat_id}/messages
-    API->>API: JWT·폐기 여부·입력 검증
+    API->>API: 인증·입력 검증
     API->>S: 회원 ID, 요청 ID, 질문
     S->>DB: 미삭제 채팅방 소유권 확인
-    S->>DB: 최근 completed 기록 최대 5건 조회
+    S->>DB: 최근 completed 5건 조회
     S->>DB: pending 질문 저장·커밋
     S->>AI: 문맥 + 현재 질문
     alt 답변 성공
         AI-->>S: 완성된 텍스트
-        S->>DB: completed·답변·종료 시각 저장
+        S->>DB: completed·답변·종료 시각 저장·커밋
         S-->>U: 201 JSON
     else AI 처리 실패
         AI-->>S: 예외
-        S->>DB: failed·오류 코드·종료 시각 저장
+        S->>DB: failed·오류 코드·종료 시각 저장·커밋
         S-->>U: 공통 오류 응답
     end
 ```
 
-AI 호출 동안 DB 트랜잭션을 열어두지 않습니다. 실패 상태 저장도 DB 장애로 실패할 수 있으며, 프로세스 중단이나 결과 저장 실패로 `pending` 기록이 남을 수 있습니다.
+질문과 결과는 같은 기록에 저장하며, AI 호출 중에는 DB 트랜잭션을 열어두지 않습니다. 프로세스 중단이나 결과·실패 상태 저장 오류로 `pending` 기록이 남을 수 있습니다.
 
 ## 최근 대화 5개 문맥 전략
 
-`ChatRepository.list_recent_completed`는 해당 채팅방의 `completed` 기록만 `created_at DESC, request_id DESC`로 정렬해 5건을 가져온 뒤 순서를 뒤집습니다. AI에는 오래된 질문·답변부터 `user`, `assistant` 메시지로 번갈아 넣고 마지막에 현재 질문을 추가합니다.
+같은 방의 `completed` 기록을 `created_at DESC, request_id DESC`로 최대 5건 조회한 뒤 순서를 뒤집습니다. 오래된 질문·답변부터 `user`·`assistant` 메시지로 넣고 마지막에 현재 질문을 추가합니다.
 
-- 5개는 질문·답변 쌍 5건입니다. 이전 메시지 최대 10개와 현재 질문 1개가 전달됩니다.
-- `pending`, `failed`, 다른 채팅방 기록은 제외합니다.
-- 전체 기록은 DB에 보존합니다. 문맥 제한이 저장 기록 삭제를 의미하지 않습니다.
-- 호출마다 문맥을 다시 구성하며 `store=False`를 전달합니다. 스트리밍과 자동 재시도는 사용하지 않습니다.
-- 토큰 수에 따른 문맥 축약, 질문 최대 길이, 같은 채팅방 동시 요청 잠금은 구현되어 있지 않습니다. `CHAT_BUSY` 코드는 정의되어 있으나 현재 발행 경로가 없습니다.
+- 5건은 질문·답변 5쌍으로, 이전 메시지 최대 10개와 현재 질문 1개를 전달합니다. `pending`·`failed`·다른 방 기록은 제외하며 DB에는 전체 기록을 보존합니다.
+- 호출마다 문맥을 구성하고 `store=False`로 요청합니다. 스트리밍은 사용하지 않으며, 일시적 오류는 같은 질문·문맥으로 [재시도](OPERATIONS.md#ai-재시도와-타임아웃)합니다.
+- 현재 질문은 앞뒤 공백 제거 후 1~1,000자로 제한합니다. 토큰 예산에 따른 문맥 축약과 동시 요청 잠금은 [미구현](PRD/chat.md#미구현-요구사항과-미확정-정책)이며, `CHAT_BUSY`는 반환하지 않습니다.
 
-인증·접근 제어는 [API](API.md), 저장 구조는 [DATABASE](DATABASE.md), 실패 대응은 [OPERATIONS](OPERATIONS.md)를 참고합니다.
+저장 구조는 [데이터베이스](DATABASE.md), 실패 대응은 [운영](OPERATIONS.md)을 참고합니다.
