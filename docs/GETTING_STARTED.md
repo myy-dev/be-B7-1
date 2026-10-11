@@ -1,12 +1,10 @@
 # 개발 환경 시작하기
 
-- **uv**: Python과 프로젝트 패키지 관리
-- **FastAPI**: API 개발 프레임워크
-- **Ruff**: 코드 검사와 자동 포맷
+uv로 Python·패키지를 관리하고 FastAPI 개발 서버를 실행합니다. 편집기와 코드 검사는 VS Code·Ruff를 사용합니다.
 
 ## 1. uv 설치
 
-Git과 VS Code를 설치한 뒤, 운영체제에 맞게 실행합니다.
+Git·VS Code 설치 후 운영체제에 맞게 실행합니다.
 
 **macOS / Linux**
 
@@ -35,20 +33,19 @@ uv python install 3.12
 uv sync --locked
 ```
 
-이후 명령은 모두 `pyproject.toml`이 있는 프로젝트 루트에서 실행합니다.
+이후 명령은 `pyproject.toml`이 있는 저장소 루트에서 실행합니다.
+패키지 변경을 받은 뒤에도 위 동기화 명령을 실행합니다.
 
 ## 3. VS Code 설정
 
-1. VS Code에서 `be-B7-1` 폴더를 엽니다.
-2. 확장 메뉴에서 다음 확장을 설치합니다.
+VS Code에서 `be-B7-1`을 열고 다음 확장을 설치합니다.
 
-   | 확장 | 확장 ID |
-   | --- | --- |
-   | Python (Microsoft) | `ms-python.python` |
-   | Ruff (Astral Software) | `charliermarsh.ruff` |
+| 확장 | 확장 ID |
+| --- | --- |
+| Python (Microsoft) | `ms-python.python` |
+| Ruff (Astral Software) | `charliermarsh.ruff` |
 
-3. 명령 팔레트에서 **Python: Select Interpreter** → `.venv`를 선택합니다.
-4. **Preferences: Open Workspace Settings (JSON)**에서 아래 설정을 추가합니다. 기존 설정이 있으면 병합합니다.
+명령 팔레트에서 **Python: Select Interpreter** → `.venv`를 선택합니다. **Preferences: Open Workspace Settings (JSON)**에 아래 설정을 추가하거나 기존 설정과 병합합니다.
 
 ```json
 {
@@ -63,54 +60,44 @@ uv sync --locked
 }
 ```
 
-- `.vscode/settings.json`은 Git 제외 대상이므로 각자 설정
+`.vscode/settings.json`은 Git에서 제외되므로 각자 설정합니다.
 
-## 4. 환경변수 설정
+## 로컬 실행
 
-프로젝트 루트에 `.env` 파일을 만들고 실제 키를 입력합니다.
-
-```dotenv
-OPENAI_API_KEY=발급받은_API_키
-OPENAI_MODEL=GPT 모델
-AI_TIMEOUT_SECONDS=30
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,https://www.quackquack-e.duckdns.org,https://b7-1-two.vercel.app
-```
-
-- OpenAI 기능 사용 시 필요하며, 현재 서버 실행 확인에는 키가 없어도 됩니다.
-- 모델을 바꾸려면 `OPENAI_MODEL=사용할_모델_ID`를 추가합니다.
-- `CORS_ORIGINS`는 브라우저가 허용할 프론트엔드 주소입니다. 쉼표로 여러 개를 적습니다. 기본값은 개발 서버(`http://localhost:5173`, `http://127.0.0.1:5173`)와 실제 배포 주소(`https://www.quackquack-e.duckdns.org`, `https://b7-1-two.vercel.app`)입니다.
-- `.env`는 커밋하지 않습니다.
-
-## 5. 서버 실행
+설치·패키지 동기화를 마친 뒤 저장소 루트에서 실행합니다.
 
 ```bash
-uv run fastapi dev
+cp .env.example .env
+openssl rand -hex 32
+```
+
+`.env`에 `OPENAI_API_KEY`, 사용할 `OPENAI_MODEL`, 생성한 `JWT_SECRET_KEY`, 로컬 DB 주소 `DATABASE_URL=sqlite+aiosqlite:///./app.db`를 설정합니다. 실제 비밀값은 Git에 올리지 않습니다. 전체 환경 변수와 비밀값 없는 예시는 [환경 변수](OPERATIONS.md#환경-변수)를 참고합니다.
+
+```bash
+uv run fastapi dev app/main.py
 ```
 
 | 확인 | 주소 / 방법 |
 | --- | --- |
 | 서버·DB 정상 여부 | http://127.0.0.1:8000/health → `{"status":"ok"}` |
 | API 문서와 요청 실행 | http://127.0.0.1:8000/docs → API 선택 → Try it out → Execute |
-| API 문서 읽기 (ReDoc) | http://127.0.0.1:8000/redoc → API별 요청·응답 구조를 읽기 좋은 형태로 확인 |
+| API 문서 읽기 (ReDoc) | http://127.0.0.1:8000/redoc → 요청·응답 구조 확인 |
 | 서버 종료 | 터미널에서 `Ctrl+C` |
 
-SQLite는 별도 설치 없이 `app.db` 파일을 사용합니다.
+`/docs`·`/redoc`은 같은 `/openapi.json`을 보여줍니다. 기본 SQLite DB는 저장소 루트의 `app.db`이며 별도 설치가 필요 없습니다.
 
-## AI 채팅 MVP
+가입·로그인 → Authorize → 채팅방 생성·질문의 실행 순서는 [사용자 API 확인](DATABASE.md#사용자-api로-확인), 테스트·권한·실패 점검은 [운영 검증](OPERATIONS.md#운영-검증)을 따릅니다. 운영 API는 [배포 Swagger](https://be-b7-1-development.up.railway.app/docs)에서 확인합니다.
 
-- 채팅방 생성·목록·상세 조회와 `POST /api/v1/chats/{chat_id}/messages`를 제공합니다.
-- 질문 전송 본문은 `{"question": "질문 내용"}`이며, 성공하면 저장된 질문·답변을 `201` 일반 JSON으로 반환합니다. 최근 완료 대화 5개를 다음 질문의 문맥에 사용합니다.
-- `OPENAI_API_KEY`와 사용할 `OPENAI_MODEL`을 설정합니다. `AI_TIMEOUT_SECONDS`의 기본값은 30초이며 자동 재시도하지 않습니다.
-- 실제 사용자 인증은 아직 미연결이므로 채팅 API는 현재 `401`을 반환합니다. 대화 흐름은 테스트에서 인증·AI 의존성을 교체하여 검증합니다.
+## API 설명 관리
+
+API 변경 시 `app/api/v1/endpoints/`의 설명·`responses`와 `app/schemas/`의 필드 설명·제한·예시를 갱신합니다. 서버를 다시 실행하면 Swagger에 반영됩니다.
 
 ## 자주 쓰는 uv 명령어
 
 | 명령어 | 용도 |
 | --- | --- |
-| `uv sync --locked` | 클론·pull 후 패키지 설치 |
-| `uv run fastapi dev` | 개발 서버 실행 |
 | `uv add 패키지명` | 패키지 추가 |
 | `uv add --dev 패키지명` | 개발용 패키지 추가 |
 | `uv remove 패키지명` | 패키지 제거 |
 
-패키지를 변경했다면 `pyproject.toml`과 `uv.lock`을 함께 커밋합니다.
+패키지 변경 시 `pyproject.toml`·`uv.lock`을 함께 커밋합니다.
