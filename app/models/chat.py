@@ -37,6 +37,7 @@ class Chat(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         UTCDateTimeType(), nullable=True
     )
+    conversation_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class ChatLog(Base):

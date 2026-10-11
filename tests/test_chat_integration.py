@@ -15,6 +15,8 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.api.dependencies import get_current_user_id
+from app.clients.ai import DEFAULT_INSTRUCTIONS
+from app.clients.openai import COMPACT_THRESHOLD
 from app.core.config import Settings
 from app.core.database import Base, _enable_sqlite_foreign_keys, get_db
 from app.core.errors import APIError
@@ -73,9 +75,10 @@ def _message(response: Response) -> dict[str, object]:
         ("429", 502, "AI_UNAVAILABLE", 0),
         ("500", 502, "AI_UNAVAILABLE", 0),
         ("success", 201, None, None),
-        ("recover_500", 201, None, 4),
-        ("recover_connection", 201, None, 4),
-        ("recover_timeout", 201, None, 4),
+        ("recover_500", 502, "AI_UNAVAILABLE", 4),
+        ("recover_connection", 502, "AI_UNAVAILABLE", 4),
+        ("recover_timeout", 504, "AI_TIMEOUT", 4),
+        ("recover_429", 201, None, 4),
         ("recover_retry_after", 201, None, 4),
         ("exhaust_408", 502, "AI_UNAVAILABLE", 4),
         ("exhaust_409", 502, "AI_UNAVAILABLE", 4),
@@ -136,9 +139,9 @@ def test_app_sdk_and_database_integration(
         settings.ai_max_retries = max_retries
     else:
         assert settings.ai_max_retries == 4
-    if scenario == "recover_retry_after":
+    if scenario in {"recover_retry_after", "retry_call_deadline"}:
         first_attempts = 2
-    elif scenario.startswith(("recover_", "exhaust_")):
+    elif scenario in {"recover_429", "exhaust_429"}:
         first_attempts = 5
     else:
         first_attempts = 1
@@ -167,6 +170,7 @@ def test_app_sdk_and_database_integration(
     monkeypatch.setattr(logger, "propagate", False)
     caplog.set_level(logging.INFO, logger="app.events")
     sdk_requests: list[httpx2.Request] = []
+    conversation_requests: list[httpx2.Request] = []
     sdk_connections: list[httpx2.AsyncClient] = []
     request_sessions: list[AsyncSession] = []
     database_url = f"sqlite+aiosqlite:///{tmp_path / 'chat.db'}"
@@ -193,6 +197,13 @@ def test_app_sdk_and_database_integration(
         monkeypatch.setitem(app.dependency_overrides, get_db, test_db)
 
         async def respond(request: httpx2.Request) -> httpx2.Response:
+            if request.url.path == "/v1/conversations":
+                conversation_requests.append(request)
+                assert not request_sessions[-1].in_transaction()
+                return httpx2.Response(200, json={
+                    "id": "conv_integration", "object": "conversation",
+                    "created_at": 1, "metadata": {},
+                })
             sdk_requests.append(request)
             payload = json.loads(request.content)
             assert not request_sessions[-1].in_transaction()
@@ -210,10 +221,15 @@ def test_app_sdk_and_database_integration(
                 assert pending.answer is pending.finished_at is None
             failure = scenario.removeprefix("recover_").removeprefix("exhaust_")
             should_fail = not scenario.startswith("recover_") or (
-                len(sdk_requests) < first_attempts
+                len(sdk_requests) < (2 if scenario == "recover_retry_after" else 5)
             )
             if failure == "timeout" and should_fail:
                 raise httpx2.ReadTimeout("hidden SDK timeout", request=request)
+            if scenario == "retry_call_deadline" and len(sdk_requests) == 1:
+                return httpx2.Response(
+                    429, headers={"Retry-After": "0.001"},
+                    json={"error": {"message": "hidden SDK error"}},
+                )
             if scenario in {"deadline", "retry_call_deadline"}:
                 await real_sleep(0.2)
             if failure == "connection" and should_fail:
@@ -236,7 +252,7 @@ def test_app_sdk_and_database_integration(
             }
             if scenario in headers and should_fail:
                 return httpx2.Response(
-                    500,
+                    429,
                     headers=headers[scenario],
                     json={"error": {"message": "hidden SDK error"}},
                 )
@@ -305,8 +321,6 @@ def test_app_sdk_and_database_integration(
                     expected_messages.extend([first_message, second_message])
                     second_payload = json.loads(sdk_requests[-1].content)
                     assert second_payload["input"] == [
-                        {"role": "user", "content": "첫 통합 질문"},
-                        {"role": "assistant", "content": f"통합 답변{first_attempts}"},
                         {"role": "user", "content": "다음 통합 질문"},
                     ]
                 else:
@@ -380,6 +394,7 @@ def test_app_sdk_and_database_integration(
                 chats = list((await session.scalars(select(Chat))).all())
                 messages = list((await session.scalars(select(ChatLog))).all())
                 assert len(chats) == 1 and chats[0].user_id == 2**40 + 7
+                assert chats[0].conversation_id == "conv_integration"
                 owner = await session.get(User, chats[0].user_id)
                 assert owner is not None and owner.username == "sdk_owner"
                 assert len(messages) == len(expected_messages)
@@ -396,9 +411,10 @@ def test_app_sdk_and_database_integration(
 
     asyncio.run(run())
     assert len(sdk_requests) == first_attempts + (1 if expected_code is None else 0)
+    assert len(conversation_requests) == 1
     if scenario == "recover_retry_after":
         expected_delays = [1.5]
-    elif scenario == "retry_wait_deadline":
+    elif scenario in {"retry_wait_deadline", "retry_call_deadline"}:
         expected_delays = [0.001]
     else:
         expected_delays = [1.0, 2.0, 4.0, 8.0][:first_attempts - 1]
@@ -408,6 +424,11 @@ def test_app_sdk_and_database_integration(
         payload = json.loads(request.content)
         assert payload["model"] == "test-model"
         assert payload["store"] is False
+        assert payload["instructions"] == DEFAULT_INSTRUCTIONS
+        assert payload["conversation"] == "conv_integration"
+        assert payload["context_management"] == [
+            {"type": "compaction", "compact_threshold": COMPACT_THRESHOLD}
+        ]
     formatter = EventLogFormatter()
     rendered = "\n".join(formatter.format(record) for record in caplog.records)
     for private_text in ("첫 통합 질문", "다음 통합 질문", "통합 답변", "hidden SDK"):
@@ -418,7 +439,9 @@ def test_app_sdk_and_database_integration(
             for record in caplog.records
             if record.request_id == message["request_id"]
         ]
-        assert events.count("db_save_succeeded") == 2
+        assert events.count("db_save_succeeded") == (
+            3 if message is expected_messages[0] else 2
+        )
         assert events.count("ai_call_started") == 1
         outcome = (
             "ai_call_succeeded" if expected_code is None else "ai_call_failed"

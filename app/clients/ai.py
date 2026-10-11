@@ -1,5 +1,4 @@
-from typing import Protocol
-
+from typing import Any, Protocol
 
 DEFAULT_INSTRUCTIONS = (
     "You are “꽥꽥이” (QuackQuack), an AI conversation companion with a duck "
@@ -35,13 +34,17 @@ class AIClient(Protocol):
     model: str
 
     async def generate_answer(
-        self, question: str, history: list[tuple[str, str]]
+        self,
+        question: str,
+        history: list[tuple[str, str]],
+        **kwargs: Any,
     ) -> str:
         """대화 문맥과 현재 질문으로 완성된 답변을 생성한다.
 
         Args:
             question: 현재 사용자의 질문.
             history: 시간순으로 정렬한 이전 질문·답변 쌍.
+            **kwargs: AI 구현체에서 사용하는 추가 요청 옵션.
 
         Returns:
             완성된 텍스트 답변.

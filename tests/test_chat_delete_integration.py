@@ -70,6 +70,11 @@ async def _delete_app(
             yield session
 
     async def transport(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/v1/conversations":
+            return httpx2.Response(200, json={
+                "id": "conv_delete", "object": "conversation",
+                "created_at": 1, "metadata": {},
+            })
         sdk_requests.append(request)
         return await respond(request)
 

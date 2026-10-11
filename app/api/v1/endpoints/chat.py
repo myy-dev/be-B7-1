@@ -119,7 +119,7 @@ async def delete_chat(
     summary="질문 전송 및 AI 답변 받기",
     description=(
         "질문을 전송하고 AI 답변을 생성하여 저장합니다. "
-        "최근 성공 대화 최대 5개를 문맥으로 사용합니다.\n\n"
+        "OpenAI Conversation으로 같은 채팅방의 문맥을 유지하고 자동 압축합니다.\n\n"
         "사용자당 질문 하나만 처리하며, 처리 중인 추가 질문은 409로 거절합니다."
     ),
     responses={
