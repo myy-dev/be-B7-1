@@ -22,7 +22,9 @@ async def lifespan(app: FastAPI):
             settings.ai_max_retries,
         )
         app.state.ai_client = client
-        app.state.chat_request_limiter = ChatRequestLimiter()
+        app.state.chat_request_limiter = ChatRequestLimiter(
+            max_concurrent_requests=settings.ai_max_concurrent_requests,
+        )
         try:
             yield
         finally:

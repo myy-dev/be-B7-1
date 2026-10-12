@@ -153,6 +153,46 @@ def test_retry_setting_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.ai_max_retries == 4
 
 
+def test_concurrent_request_setting_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """동시 질문 한도 환경변수가 없으면 기본값 3을 사용한다."""
+    monkeypatch.delenv("AI_MAX_CONCURRENT_REQUESTS", raising=False)
+    settings = Settings(
+        _env_file=None,
+        openai_api_key="test-only",
+        jwt_secret_key="test-only-ai-client-secret-123456789",
+    )
+    assert settings.ai_max_concurrent_requests == 3
+
+
+@pytest.mark.parametrize("value", ["1", "3", "7"])
+def test_concurrent_request_setting_from_environment(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """양의 정수 동시 질문 한도를 환경변수에서 읽는다."""
+    monkeypatch.setenv("AI_MAX_CONCURRENT_REQUESTS", value)
+    settings = Settings(
+        _env_file=None,
+        openai_api_key="test-only",
+        jwt_secret_key="test-only-ai-client-secret-123456789",
+    )
+    assert settings.ai_max_concurrent_requests == int(value)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "invalid", "1.5"])
+def test_invalid_concurrent_request_setting_rejected(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """0·음수·문자열·소수 동시 질문 한도는 설정 생성 시 거절한다."""
+    monkeypatch.setenv("AI_MAX_CONCURRENT_REQUESTS", value)
+    with pytest.raises(ValidationError) as caught:
+        Settings(
+            _env_file=None,
+            openai_api_key="test-only",
+            jwt_secret_key="test-only-ai-client-secret-123456789",
+        )
+    assert caught.value.errors()[0]["loc"] == ("ai_max_concurrent_requests",)
+
+
 @pytest.mark.parametrize("value", ["0", "4", "7"])
 def test_retry_setting_from_environment(
     monkeypatch: pytest.MonkeyPatch, value: str

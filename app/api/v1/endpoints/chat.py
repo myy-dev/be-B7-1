@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request, Response, status
 
 from app.api.dependencies import AIClientDep, ChatServiceDep, CurrentUserId, RequestId
 from app.api.error_responses import (
-    AI_CONFIGURATION_ERROR_RESPONSE,
+    AI_SERVICE_UNAVAILABLE_RESPONSE,
     AI_TIMEOUT_RESPONSE,
     AI_UNAVAILABLE_RESPONSE,
     CHAT_BUSY_RESPONSE,
@@ -120,7 +120,8 @@ async def delete_chat(
     description=(
         "질문을 전송하고 AI 답변을 생성하여 저장합니다. "
         "OpenAI Conversation으로 같은 채팅방의 문맥을 유지하고 자동 압축합니다.\n\n"
-        "사용자당 질문 하나만 처리하며, 처리 중인 추가 질문은 409로 거절합니다."
+        "사용자당 질문 하나만 처리하며, 처리 중인 추가 질문은 409로 거절합니다. "
+        "전체 동시 질문 한도를 초과하면 대기 없이 503 SERVER_BUSY로 거절합니다."
     ),
     responses={
         404: CHAT_NOT_FOUND_RESPONSE,
@@ -128,7 +129,7 @@ async def delete_chat(
         422: INVALID_INPUT_RESPONSE,
         500: DB_ERROR_RESPONSE,
         502: AI_UNAVAILABLE_RESPONSE,
-        503: AI_CONFIGURATION_ERROR_RESPONSE,
+        503: AI_SERVICE_UNAVAILABLE_RESPONSE,
         504: AI_TIMEOUT_RESPONSE,
     },
 )

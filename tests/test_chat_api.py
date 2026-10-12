@@ -112,7 +112,7 @@ def chat_api() -> Iterator[_ChatAPI]:
 
     asyncio.run(create_tables())
     app = FastAPI()
-    app.state.chat_request_limiter = ChatRequestLimiter()
+    app.state.chat_request_limiter = ChatRequestLimiter(max_concurrent_requests=5)
     configure_request_processing(app)
     app.include_router(health_router)
     app.include_router(api_router, prefix="/api/v1")
