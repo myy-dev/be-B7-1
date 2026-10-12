@@ -257,11 +257,19 @@ def test_logs_return_record_fields(db_client):
 def test_sessions_and_detail(db_client):
     # 사용자 세션 목록 → 세션 상세(그 세션의 대화 포함) 흐름을 확인한다.
     listing = db_client.get("/api/v1/admin/sessions", params={"user_id": 1}).json()
-    assert listing["total"] >= 1
-    chat_id = listing["items"][0]["chat_id"]
+    assert listing["total"] == 1
+    item = listing["items"][0]
+    assert "title" not in item
+    assert item["message_count"] == 2
+    chat_id = item["chat_id"]
     detail = db_client.get(f"/api/v1/admin/sessions/{chat_id}").json()
     assert detail["chat_id"] == chat_id
-    assert isinstance(detail["messages"], list)
+    assert "title" not in detail
+    assert detail["message_count"] == 2
+    assert {message["question"] for message in detail["messages"]} == {
+        "배포 방법 알려줘",
+        "아까 뭐 물어봤지?",
+    }
 
 
 def test_get_session_not_found(db_client):

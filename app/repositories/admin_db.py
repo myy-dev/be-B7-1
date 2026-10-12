@@ -128,19 +128,10 @@ class DbSessionRepository(SessionRepository):
     async def list_sessions(
         self, user_id: int, page: int, size: int
     ) -> tuple[list[dict], int]:
-        # 세션마다 count·첫 질문을 따로 조회하면 N+1이 나므로, 상관 서브쿼리로
-        # 한 번에 가져온다.
-        # TODO(채팅 담당): chats에 title 컬럼이 생기면 파생을 걷어낸다.
+        # 메시지 수는 상관 서브쿼리로 한 번에 조회한다.
         count_sq = (
             select(func.count(ChatLog.request_id))
             .where(ChatLog.chat_id == Chat.chat_id)
-            .scalar_subquery()
-        )
-        first_sq = (
-            select(ChatLog.question)
-            .where(ChatLog.chat_id == Chat.chat_id)
-            .order_by(ChatLog.created_at.asc(), ChatLog.request_id.asc())
-            .limit(1)
             .scalar_subquery()
         )
         total = (
@@ -151,7 +142,7 @@ class DbSessionRepository(SessionRepository):
         )
         begin = max(page - 1, 0) * max(size, 1)
         rows = await self.session.execute(
-            select(Chat, count_sq, first_sq)
+            select(Chat, count_sq)
             .where(Chat.user_id == user_id)
             .order_by(Chat.created_at.desc(), Chat.chat_id.desc())
             .offset(begin)
@@ -161,11 +152,10 @@ class DbSessionRepository(SessionRepository):
             {
                 "chat_id": str(chat.chat_id),
                 "user_id": chat.user_id,
-                "title": first or "",
                 "created_at": chat.created_at,
                 "message_count": count or 0,
             }
-            for chat, count, first in rows.all()
+            for chat, count in rows.all()
         ]
         return items, total
 
@@ -183,11 +173,9 @@ class DbSessionRepository(SessionRepository):
             .order_by(ChatLog.created_at.asc(), ChatLog.request_id.asc())
         )
         messages = [_log_dict(r) for r in rows.all()]
-        # TODO(채팅 담당): chats에 title 컬럼이 생기면 파생을 걷어낸다.
         return {
             "chat_id": str(chat.chat_id),
             "user_id": chat.user_id,
-            "title": messages[0]["question"] if messages else "",
             "created_at": chat.created_at,
             "message_count": len(messages),
             "messages": messages,

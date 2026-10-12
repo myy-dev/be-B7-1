@@ -45,7 +45,6 @@ class ChatLogItem(BaseModel):
 class SessionItem(BaseModel):
     chat_id: str
     user_id: int
-    title: str
     created_at: datetime
     message_count: int
 
