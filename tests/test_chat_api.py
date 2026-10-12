@@ -112,7 +112,7 @@ def chat_api() -> Iterator[_ChatAPI]:
 
     asyncio.run(create_tables())
     app = FastAPI()
-    app.state.chat_request_limiter = ChatRequestLimiter()
+    app.state.chat_request_limiter = ChatRequestLimiter(max_concurrent_requests=5)
     configure_request_processing(app)
     app.include_router(health_router)
     app.include_router(api_router, prefix="/api/v1")
@@ -473,7 +473,8 @@ def test_create_failure_rolls_back_session(chat_api: _ChatAPI) -> None:
             with pytest.raises(DatabaseSaveError) as caught:
                 await repository.create(None)  # type: ignore[arg-type]
             assert isinstance(caught.value.original, IntegrityError)
-            chat = await repository.create(chat_api.user_id)
+            chat, created = await repository.create(chat_api.user_id)
+            assert created
             return chat.chat_id
 
     chat_id = asyncio.run(create_after_failure())
@@ -848,7 +849,8 @@ def test_context_contains_only_last_five_completed_pairs(chat_api: _ChatAPI) -> 
     chat_api.authenticate()
     ai = _mock_ai(chat_api)
     chat_id = UUID(chat_api.client.post("/api/v1/chats").json()["chat_id"])
-    other = UUID(chat_api.client.post("/api/v1/chats").json()["chat_id"])
+    other = UUID("00000000-0000-4000-8000-000000000099")
+    chat_api.seed(Chat(chat_id=other, user_id=chat_api.user_id))
     moment = datetime(2026, 10, 5, tzinfo=UTC)
     rows = [
         ChatLog(
@@ -1003,3 +1005,23 @@ def test_signup_user_can_create_chat_and_save_message(chat_api: _ChatAPI) -> Non
             assert user.username == "signup_owner"
 
     asyncio.run(check_user())
+
+
+def test_empty_chat_reuse_returns_200_without_duplicate_save_log(
+    chat_api: _ChatAPI, caplog: pytest.LogCaptureFixture
+) -> None:
+    """재사용 응답은 같은 방을 반환하고 저장 성공 로그를 추가하지 않는다."""
+    chat_api.authenticate()
+    caplog.set_level(logging.INFO, logger="app.events")
+    first = chat_api.client.post("/api/v1/chats")
+    second = chat_api.client.post("/api/v1/chats")
+    assert first.status_code == 201
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert len(chat_api.stored_chats()) == 1
+    saves = [r for r in caplog.records if r.getMessage() == "db_save_succeeded"]
+    assert len(saves) == 1
+    assert saves[0].request_id == first.headers["X-Request-ID"]
+    assert first.headers["X-Request-ID"] != second.headers["X-Request-ID"]
+    responses = chat_api.app.openapi()["paths"]["/api/v1/chats"]["post"]["responses"]
+    assert responses["200"]["content"] == responses["201"]["content"]

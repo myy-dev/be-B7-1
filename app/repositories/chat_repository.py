@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, insert, literal, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,16 +13,38 @@ class ChatRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def create(self, user_id: int) -> Chat:
-        """채팅방을 생성한다."""
-        chat = Chat(user_id=user_id)
+    async def create(self, user_id: int) -> tuple[Chat, bool]:
+        """빈 채팅방을 재사용하거나 새로 생성한다."""
+        has_messages = exists().where(ChatLog.chat_id == Chat.chat_id)
+        empty_chat_query = (
+            select(Chat)
+            .where(
+                Chat.user_id == user_id,
+                Chat.deleted_at.is_(None),
+                ~has_messages,
+            )
+            .order_by(Chat.created_at.desc(), Chat.chat_id.desc())
+            .limit(1)
+        )
+        stmt = (
+            insert(Chat)
+            .from_select(
+                ["user_id"],
+                select(literal(user_id)).where(~empty_chat_query.exists()),
+            )
+            .returning(Chat)
+        )
         try:
-            self.session.add(chat)
+            chat = await self.session.scalar(stmt)
+            created = chat is not None
+            if chat is None:
+                result = await self.session.execute(empty_chat_query)
+                chat = result.scalar_one()
             await self.session.commit()
         except SQLAlchemyError as exc:
             await self.session.rollback()
             raise DatabaseSaveError(exc) from exc
-        return chat
+        return chat, created
 
     async def list_by_user(self, user_id: int) -> list[Chat]:
         """사용자의 채팅방 목록을 조회한다."""
@@ -46,9 +68,7 @@ class ChatRepository:
             select(Chat.conversation_id).where(Chat.chat_id == chat_id)
         )
 
-    async def save_conversation_id(
-        self, chat_id: UUID, conversation_id: str
-    ) -> None:
+    async def save_conversation_id(self, chat_id: UUID, conversation_id: str) -> None:
         """채팅방의 Conversation ID를 저장한다.
 
         Args:

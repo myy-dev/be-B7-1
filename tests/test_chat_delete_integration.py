@@ -40,6 +40,7 @@ async def _delete_app(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     respond: Callable[[httpx2.Request], Awaitable[httpx2.Response]],
+    max_concurrent_requests: int = 5,
 ) -> AsyncIterator[_DeleteApp]:
     """실제 앱·JWT 인증·SDK와 임시 파일 DB를 연결한다."""
     settings = Settings(
@@ -48,6 +49,7 @@ async def _delete_app(
         openai_model="test-model",
         ai_timeout_seconds=30,
         ai_max_retries=0,
+        ai_max_concurrent_requests=max_concurrent_requests,
         jwt_secret_key="test-only-chat-delete-secret-123456789",
     )
     monkeypatch.setattr("app.main.settings", settings)
@@ -170,8 +172,9 @@ def test_user_concurrency_across_rooms(
             ai.generate_answer.side_effect = answer
             monkeypatch.setitem(app.dependency_overrides, get_ai_client, lambda: ai)
             first_room = (await env.client.post("/api/v1/chats")).json()["chat_id"]
-            second_room = (await env.client.post("/api/v1/chats")).json()["chat_id"]
+            second_room = str(uuid4())
             async with env.sessions() as session:
+                session.add(Chat(chat_id=UUID(second_room), user_id=1))
                 session.add(
                     User(id=2, username="other", password_hash="test", name="회원")
                 )
@@ -227,6 +230,139 @@ def test_user_concurrency_across_rooms(
             assert next_response.status_code == 201
             assert ai.generate_answer.call_args.args[1] == [("첫 질문", "답변")]
             assert ai.generate_answer.await_count == 3
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "ending", ["success", "failure", "timeout", "unexpected", "cancel"]
+)
+def test_global_concurrency_rejects_and_releases_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    """전체 한도 초과를 저장·AI 호출 없이 거절하고 모든 종료 후 자리를 반환한다."""
+
+    async def run() -> None:
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+        release_first = asyncio.Event()
+        release_second = asyncio.Event()
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            raise AssertionError("모의 AI 외 SDK 호출은 없어야 한다.")
+
+        async def answer(question: str, history: list[tuple[str, str]]) -> str:
+            if question == "첫 질문":
+                first_started.set()
+                await release_first.wait()
+                if ending == "unexpected":
+                    raise RuntimeError("test-only")
+                if ending in {"failure", "timeout"}:
+                    raise APIError(
+                        "AI_TIMEOUT" if ending == "timeout" else "AI_UNAVAILABLE"
+                    )
+            elif question == "두 번째 질문":
+                second_started.set()
+                await release_second.wait()
+            return "답변"
+
+        async with _delete_app(
+            tmp_path, monkeypatch, respond, max_concurrent_requests=2
+        ) as env:
+            ai = AsyncMock()
+            ai.model = "test-model"
+            ai.generate_answer.side_effect = answer
+            monkeypatch.setitem(app.dependency_overrides, get_ai_client, lambda: ai)
+            async with env.sessions() as session:
+                session.add_all(
+                    [
+                        User(
+                            id=user_id,
+                            username=f"global_owner_{user_id}",
+                            password_hash="test",
+                            name="회원",
+                        )
+                        for user_id in (2, 3)
+                    ]
+                )
+                await session.commit()
+            headers: list[dict[str, str]] = []
+            paths: list[str] = []
+            for user_id in (1, 2, 3):
+                token, _ = create_access_token(user_id)
+                authorization = {"Authorization": f"Bearer {token}"}
+                headers.append(authorization)
+                response = await env.client.post("/api/v1/chats", headers=authorization)
+                assert response.status_code == 201
+                paths.append(f"/api/v1/chats/{response.json()['chat_id']}/messages")
+            tasks = [
+                asyncio.create_task(
+                    env.client.post(
+                        paths[index],
+                        headers=headers[index],
+                        json={"question": question},
+                    )
+                )
+                for index, question in enumerate(("첫 질문", "두 번째 질문"))
+            ]
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(first_started.wait(), second_started.wait()), 2
+                )
+                duplicate = await env.client.post(
+                    paths[0], headers=headers[0], json={"question": "중복 질문"}
+                )
+                _assert_error(duplicate, "CHAT_BUSY", 409)
+                rejected = await asyncio.wait_for(
+                    env.client.post(
+                        paths[2], headers=headers[2], json={"question": "초과 질문"}
+                    ),
+                    2,
+                )
+                _assert_error(rejected, "SERVER_BUSY", 503)
+                assert (
+                    rejected.json()["error"]["message"]
+                    == APIError("SERVER_BUSY").message
+                )
+                assert ai.generate_answer.await_count == 2
+                async with env.sessions() as session:
+                    records = list((await session.scalars(select(ChatLog))).all())
+                    assert {item.question for item in records} == {
+                        "첫 질문",
+                        "두 번째 질문",
+                    }
+                    assert all(item.status == "pending" for item in records)
+                if ending == "cancel":
+                    tasks[0].cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await tasks[0]
+                else:
+                    release_first.set()
+                    first = await tasks[0]
+                    expected = {
+                        "success": 201,
+                        "failure": 502,
+                        "timeout": 504,
+                        "unexpected": 500,
+                    }
+                    assert first.status_code == expected[ending]
+                assert not tasks[1].done()
+                admitted = await env.client.post(
+                    paths[2], headers=headers[2], json={"question": "자리 반환 후 질문"}
+                )
+                assert admitted.status_code == 201
+                assert ai.generate_answer.await_count == 3
+                _, records = await _stored_chat(
+                    env.sessions, UUID(paths[2].split("/")[-2])
+                )
+                assert len(records) == 1
+                assert records[0].question == "자리 반환 후 질문"
+                assert records[0].status == "completed"
+            finally:
+                release_first.set()
+                release_second.set()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            assert tasks[1].result().status_code == 201
 
     asyncio.run(run())
 
@@ -492,6 +628,29 @@ def test_concurrent_delete_only_one_succeeds(
             await _assert_hidden(env.client, path)
             chat, _ = await _stored_chat(env.sessions, chat_id)
             assert chat.deleted_at == winner
+            assert env.sdk_requests == []
+
+    asyncio.run(run())
+
+
+def test_concurrent_authenticated_creates_reuse_one_empty_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JWT 인증을 거치는 동시 생성 요청에서 한 번만 생성하고 나머지는 재사용한다."""
+
+    async def run() -> None:
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            raise AssertionError("채팅방 생성에서는 AI를 호출하지 않는다.")
+
+        async with _delete_app(tmp_path, monkeypatch, respond) as env:
+            responses = await asyncio.gather(
+                *(env.client.post("/api/v1/chats") for _ in range(8))
+            )
+            assert [r.status_code for r in responses].count(201) == 1
+            assert [r.status_code for r in responses].count(200) == 7
+            assert len({r.json()["chat_id"] for r in responses}) == 1
+            listing = await env.client.get("/api/v1/chats")
+            assert listing.json() == {"items": [responses[0].json()]}
             assert env.sdk_requests == []
 
     asyncio.run(run())

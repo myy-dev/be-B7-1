@@ -110,6 +110,18 @@ def test_message_documents_user_concurrency(docs_client: TestClient) -> None:
     assert example["error"]["message"] == APIError("CHAT_BUSY").message
 
 
+def test_message_documents_global_concurrency(docs_client: TestClient) -> None:
+    """전체 한도 오류와 기존 AI 설정 오류를 같은 503 응답에 문서화한다."""
+    operation = docs_client.get("/openapi.json").json()["paths"][MESSAGE_PATH]["post"]
+    assert "대기 없이 503 SERVER_BUSY" in operation["description"]
+    examples = operation["responses"]["503"]["content"]["application/json"]["examples"]
+    assert set(examples) == {"AI_CONFIGURATION_ERROR", "SERVER_BUSY"}
+    assert (
+        examples["SERVER_BUSY"]["value"]["error"]["message"]
+        == APIError("SERVER_BUSY").message
+    )
+
+
 @pytest.mark.parametrize(
     ("path", "method", "url", "code", "status"),
     [
@@ -135,7 +147,7 @@ def test_examples_match_real_services_and_handlers(
     repository.get_by_id_and_user.return_value = None
     repository.soft_delete.return_value = False
     repository.list_recent_completed.return_value = []
-    service = ChatService(repository, ChatRequestLimiter())
+    service = ChatService(repository, ChatRequestLimiter(max_concurrent_requests=5))
     docs_client.app.dependency_overrides[get_chat_service] = lambda: service
     ai = AsyncMock()
     ai.model = "test-only"

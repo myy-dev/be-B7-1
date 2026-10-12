@@ -7,6 +7,7 @@ ErrorCode = Literal[
     "FORBIDDEN",
     "CHAT_NOT_FOUND",
     "CHAT_BUSY",
+    "SERVER_BUSY",
     "INVALID_INPUT",
     "DB_ERROR",
     "AI_UNAVAILABLE",
