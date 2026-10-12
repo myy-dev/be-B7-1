@@ -33,6 +33,42 @@ class ChatRepository:
         )
         return list(result.all())
 
+    async def get_conversation_id(self, chat_id: UUID) -> str | None:
+        """채팅방에 저장된 현재 Conversation ID를 조회한다.
+
+        Args:
+            chat_id: 소유권 검사를 마친 채팅방의 ID.
+
+        Returns:
+            저장된 Conversation ID 또는 연결되지 않은 경우 None.
+        """
+        return await self.session.scalar(
+            select(Chat.conversation_id).where(Chat.chat_id == chat_id)
+        )
+
+    async def save_conversation_id(
+        self, chat_id: UUID, conversation_id: str
+    ) -> None:
+        """채팅방의 Conversation ID를 저장한다.
+
+        Args:
+            chat_id: 소유권 검사를 마친 채팅방의 ID.
+            conversation_id: OpenAI에서 생성한 Conversation ID.
+
+        Raises:
+            DatabaseSaveError: ID 저장에 실패한 경우.
+        """
+        try:
+            await self.session.execute(
+                update(Chat)
+                .where(Chat.chat_id == chat_id)
+                .values(conversation_id=conversation_id)
+            )
+            await self.session.commit()
+        except SQLAlchemyError as exc:
+            await self.session.rollback()
+            raise DatabaseSaveError(exc) from exc
+
     async def list_recent_completed(self, chat_id: UUID) -> list[ChatLog]:
         """채팅방의 최근 완료된 대화 기록을 조회한다.
 

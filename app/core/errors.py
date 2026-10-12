@@ -34,7 +34,7 @@ ERROR_MESSAGES: dict[ErrorCode, str] = {
     "UNAUTHORIZED": "로그인이 필요합니다.",
     "FORBIDDEN": "접근 권한이 없습니다.",
     "CHAT_NOT_FOUND": "채팅방을 찾을 수 없습니다.",
-    "CHAT_BUSY": "이전 질문을 처리 중입니다. 잠시 후 다시 시도해 주세요.",
+    "CHAT_BUSY": "다른 질문을 처리 중입니다. 잠시 후 다시 시도해 주세요.",
     "INVALID_INPUT": "입력값을 확인해 주세요.",
     "DB_ERROR": "대화 데이터를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
     "AI_UNAVAILABLE": "답변을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.",
