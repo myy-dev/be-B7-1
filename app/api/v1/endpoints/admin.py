@@ -41,7 +41,7 @@ router = APIRouter(
 )
 
 
-@router.get("/users", response_model=Page[UserSummary])
+@router.get("/users", response_model=Page[UserSummary], summary="회원 목록 조회")
 async def list_users(
     service: Annotated[AdminService, Depends(get_admin_service)],
     page: int = Query(1, ge=1),
@@ -51,7 +51,7 @@ async def list_users(
     return make_page(items, total, page, size)
 
 
-@router.get("/users/{user_id}", response_model=UserDetail)
+@router.get("/users/{user_id}", response_model=UserDetail, summary="회원 상세 조회")
 async def get_user(
     user_id: int,
     service: Annotated[AdminService, Depends(get_admin_service)],
@@ -59,7 +59,9 @@ async def get_user(
     return await service.get_user(user_id)
 
 
-@router.patch("/users/{user_id}/role", response_model=RoleUpdateResponse)
+@router.patch(
+    "/users/{user_id}/role", response_model=RoleUpdateResponse, summary="회원 권한 변경"
+)
 async def update_user_role(
     user_id: int,
     body: RoleUpdateRequest,
@@ -69,7 +71,7 @@ async def update_user_role(
     return await service.update_role(user_id, body.role, admin.get("user_id"))
 
 
-@router.get("/logs", response_model=Page[ChatLogItem])
+@router.get("/logs", response_model=Page[ChatLogItem], summary="대화 기록 목록 조회")
 async def list_logs(
     service: Annotated[AdminService, Depends(get_admin_service)],
     user_id: int | None = None,
@@ -82,7 +84,7 @@ async def list_logs(
     return make_page(items, total, page, size)
 
 
-@router.get("/sessions", response_model=Page[SessionItem])
+@router.get("/sessions", response_model=Page[SessionItem], summary="세션 목록 조회")
 async def list_sessions(
     service: Annotated[AdminService, Depends(get_admin_service)],
     user_id: int,
@@ -93,7 +95,9 @@ async def list_sessions(
     return make_page(items, total, page, size)
 
 
-@router.get("/sessions/{chat_id}", response_model=SessionDetail)
+@router.get(
+    "/sessions/{chat_id}", response_model=SessionDetail, summary="세션 상세 조회"
+)
 async def get_session(
     chat_id: str,
     service: Annotated[AdminService, Depends(get_admin_service)],
@@ -101,7 +105,9 @@ async def get_session(
     return await service.get_session(chat_id)
 
 
-@router.get("/system-logs", response_model=Page[SystemLogItem])
+@router.get(
+    "/system-logs", response_model=Page[SystemLogItem], summary="시스템 로그 목록 조회"
+)
 async def list_system_logs(
     service: Annotated[AdminService, Depends(get_admin_service)],
     level: str | None = None,

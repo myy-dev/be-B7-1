@@ -31,7 +31,10 @@ def get_auth_service(db: Annotated[AsyncSession, Depends(get_db)]) -> AuthServic
 
 # 회원가입 API: POST /api/v1/auth/signup 요청을 가입 서비스로 전달한다.
 @router.post(
-    "/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED
+    "/signup",
+    response_model=SignupResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="회원가입",
 )
 async def signup(
     data: SignupRequest,
@@ -41,7 +44,7 @@ async def signup(
 
 
 # 로그인 API 구현: POST /api/v1/auth/login 요청을 로그인 서비스로 전달한다.
-@router.post("/login", response_model=LoginResponse)
+@router.post("/login", response_model=LoginResponse, summary="로그인")
 async def login(
     data: LoginRequest,
     service: Annotated[AuthService, Depends(get_auth_service)],
@@ -61,7 +64,7 @@ async def get_my_info(user: CurrentUser):
 
 
 # 로그아웃 API 구현: 현재 액세스 토큰을 폐기해 이후 요청에서 사용할 수 없게 한다.
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, summary="로그아웃")
 async def logout(
     user_id: CurrentUserId,
     db: DBSession,
