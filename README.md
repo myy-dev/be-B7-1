@@ -50,5 +50,6 @@ flowchart LR
 | [API 명세 (Swagger)](https://be-b7-1-development.up.railway.app/docs) | 코드에서 생성한 요청·응답·입력 규칙 확인과 실행 |
 | [운영과 배포](docs/OPERATIONS.md) | 환경 변수, Railway, 로그, AI 오류 대응 |
 | [개발 환경](docs/GETTING_STARTED.md) | 설치, 로컬 실행, VS Code 설정, 패키지 관리 |
+| [시스템 프롬프트](docs/SYSTEM_PROMPT.md) | 한글 검토용 번역과 설명, 영어 도입용 원문 |
 | [팀 작업](docs/TEAM.md) | 팀원 역할, 업무 분담과 협업 방식 |
 | [프론트 저장소](https://github.com/myy-dev/fe-B7-1#readme) | 화면 사용 안내, 프론트 실행과 배포 |
