@@ -33,20 +33,30 @@ router = APIRouter(
     "",
     response_model=ChatResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="채팅방 생성",
-    description=("현재 사용자 소유의 새 채팅방을 생성합니다.\n\n"),
+    summary="채팅방 생성 또는 빈 채팅방 재사용",
+    description=(
+        "현재 사용자의 삭제되지 않은 빈 채팅방이 있으면 반환하고, "
+        "없으면 새로 생성합니다. 대화 기록이 없는 방을 빈 방으로 판단합니다."
+    ),
     responses={
+        200: {
+            "model": ChatResponse,
+            "description": "기존 빈 채팅방 반환",
+        },
         500: DB_ERROR_RESPONSE,
     },
 )
 async def create_chat(
     request: Request,
+    response: Response,
     user_id: CurrentUserId,
     service: ChatServiceDep,
 ) -> ChatResponse:
-    response = await service.create_chat(user_id)
-    request.state.chat_id = response.chat_id
-    return response
+    """생성 여부에 따라 상태 코드를 설정하고 채팅방을 반환한다."""
+    chat, created = await service.create_chat(user_id)
+    request.state.chat_id = chat.chat_id
+    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    return chat
 
 
 @router.get(

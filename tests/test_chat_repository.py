@@ -64,10 +64,10 @@ def test_soft_delete_filters_user_queries_and_keeps_other_chats(
         deleted_at = datetime(2026, 10, 9, 3, tzinfo=UTC)
         async with repository_sessions() as session:
             repository = ChatRepository(session)
-            deleted = await repository.create(1)
-            active = await repository.create(1)
-            other = await repository.create(2)
+            deleted, _ = await repository.create(1)
             assert await repository.soft_delete(deleted.chat_id, 1, deleted_at)
+            active, _ = await repository.create(1)
+            other, _ = await repository.create(2)
             assert not session.in_transaction()
             assert await repository.get_by_id_and_user(deleted.chat_id, 1) is None
             assert await repository.get_by_id_and_user(active.chat_id, 1) is active
@@ -98,7 +98,7 @@ def test_soft_delete_unmatched_rows_do_not_change_data(
         deleted_at = datetime(2026, 10, 9, 3, tzinfo=UTC)
         async with repository_sessions() as session:
             repository = ChatRepository(session)
-            chat = await repository.create(1)
+            chat, _ = await repository.create(1)
             if case == "already_deleted":
                 assert await repository.soft_delete(chat.chat_id, 1, deleted_at)
             assert not await repository.soft_delete(
@@ -128,7 +128,7 @@ def test_pending_message_finishes_after_soft_delete(
         deleted_at = datetime(2026, 10, 9, 3, tzinfo=UTC)
         async with repository_sessions() as processing:
             repository = ChatRepository(processing)
-            chat = await repository.create(1)
+            chat, _ = await repository.create(1)
             message = ChatLog(
                 request_id=uuid4(),
                 chat_id=chat.chat_id,
@@ -172,7 +172,7 @@ def test_soft_delete_commit_failure_rolls_back_and_session_remains_usable(
         deleted_at = datetime(2026, 10, 9, 3, tzinfo=UTC)
         async with repository_sessions() as session:
             repository = ChatRepository(session)
-            chat_id = (await repository.create(1)).chat_id
+            chat_id = (await repository.create(1))[0].chat_id
             failure = OperationalError("test-only", {}, RuntimeError())
             with patch.object(session, "commit", AsyncMock(side_effect=failure)):
                 with pytest.raises(DatabaseSaveError) as caught:
@@ -195,7 +195,7 @@ def test_concurrent_soft_deletes_only_store_one_timestamp(
 
     async def run() -> None:
         async with repository_sessions() as session:
-            chat_id = (await ChatRepository(session).create(1)).chat_id
+            chat_id = (await ChatRepository(session).create(1))[0].chat_id
         timestamps = [
             datetime(2026, 10, 9, 3, tzinfo=UTC),
             datetime(2026, 10, 9, 4, tzinfo=UTC),
@@ -211,5 +211,99 @@ def test_concurrent_soft_deletes_only_store_one_timestamp(
             chat = await session.get(Chat, chat_id)
             assert chat is not None
             assert chat.deleted_at == timestamps[results.index(True)]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_concurrent_creates_return_one_empty_chat(
+    repository_sessions: async_sessionmaker[AsyncSession], existing: bool
+) -> None:
+    """독립 연결의 동시 생성에서 한 방만 저장하고 모두 같은 ID를 반환한다."""
+
+    async def run() -> None:
+        if existing:
+            async with repository_sessions() as session:
+                await ChatRepository(session).create(1)
+        start = asyncio.Event()
+
+        async def create() -> tuple[Chat, bool]:
+            async with repository_sessions() as session:
+                # 인증 조회가 선행된 요청처럼 읽기 후 생성을 실행한다.
+                assert await session.get(User, 1) is not None
+                await start.wait()
+                return await ChatRepository(session).create(1)
+
+        tasks = [asyncio.create_task(create()) for _ in range(12)]
+        start.set()
+        results = await asyncio.gather(*tasks)
+        assert len({chat.chat_id for chat, _ in results}) == 1
+        assert sum(created for _, created in results) == (0 if existing else 1)
+        async with repository_sessions() as session:
+            chats = await ChatRepository(session).list_by_user(1)
+            assert len(chats) == 1
+            assert chats[0].chat_id == results[0][0].chat_id
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("status", ["pending", "completed", "failed"])
+def test_any_question_record_allows_new_empty_chat(
+    repository_sessions: async_sessionmaker[AsyncSession], status: str
+) -> None:
+    """질문 처리 상태와 관계없이 기록이 있는 방은 재사용하지 않는다."""
+
+    async def run() -> None:
+        async with repository_sessions() as session:
+            repository = ChatRepository(session)
+            first, created = await repository.create(1)
+            assert created
+            reused, created = await repository.create(1)
+            assert not created and reused.chat_id == first.chat_id
+            await repository.save_message(
+                ChatLog(
+                    request_id=uuid4(),
+                    chat_id=first.chat_id,
+                    question="질문",
+                    model="test-model",
+                    status=status,
+                    answer="답변" if status == "completed" else None,
+                    error_code="AI_TIMEOUT" if status == "failed" else None,
+                    finished_at=datetime.now(UTC) if status != "pending" else None,
+                )
+            )
+            second, created = await repository.create(1)
+            assert created and second.chat_id != first.chat_id
+            other, created = await repository.create(2)
+            assert created and other.chat_id != second.chat_id
+            reused, created = await repository.create(1)
+            assert not created and reused.chat_id == second.chat_id
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_create_commit_failure_rolls_back_and_session_remains_usable(
+    repository_sessions: async_sessionmaker[AsyncSession], existing: bool
+) -> None:
+    """생성·재사용 커밋 실패 후 기록을 보존하고 같은 세션을 재사용한다."""
+
+    async def run() -> None:
+        async with repository_sessions() as session:
+            repository = ChatRepository(session)
+            if existing:
+                await repository.create(1)
+            failure = OperationalError("test-only", {}, RuntimeError())
+            with patch.object(session, "commit", AsyncMock(side_effect=failure)):
+                with pytest.raises(DatabaseSaveError) as caught:
+                    await repository.create(1)
+                assert caught.value.original is failure
+                assert caught.value.__cause__ is failure
+            assert not session.in_transaction()
+            assert len(await repository.list_by_user(1)) == int(existing)
+            _, created = await repository.create(1)
+            assert created is not existing
+            assert not session.in_transaction()
+            assert len(await repository.list_by_user(1)) == 1
 
     asyncio.run(run())

@@ -64,16 +64,17 @@ class ChatService:
             result="success",
         )
 
-    async def create_chat(self, user_id: int) -> ChatResponse:
-        """사용자의 채팅방을 생성한다."""
-        chat = await self.repository.create(user_id)
-        log_event(
-            "db_save_succeeded",
-            user_id=str(user_id),
-            chat_id=chat.chat_id,
-            result="success",
-        )
-        return ChatResponse.model_validate(chat)
+    async def create_chat(self, user_id: int) -> tuple[ChatResponse, bool]:
+        """빈 채팅방을 반환하고 신규 생성 여부를 전달한다."""
+        chat, created = await self.repository.create(user_id)
+        if created:
+            log_event(
+                "db_save_succeeded",
+                user_id=str(user_id),
+                chat_id=chat.chat_id,
+                result="success",
+            )
+        return ChatResponse.model_validate(chat), created
 
     async def list_chats(self, user_id: int) -> ChatListResponse:
         """사용자의 채팅방 목록을 조회한다."""

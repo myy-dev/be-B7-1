@@ -519,7 +519,10 @@ def test_user_gate_and_deletion_during_conversation_creation(
 
         async with _conversation_app(tmp_path, monkeypatch, respond) as env:
             room = UUID((await env.client.post("/api/v1/chats")).json()["chat_id"])
-            another = (await env.client.post("/api/v1/chats")).json()["chat_id"]
+            another = str(uuid4())
+            async with env.sessions() as session:
+                session.add(Chat(chat_id=UUID(another), user_id=1))
+                await session.commit()
             path = f"/api/v1/chats/{room}"
             task = asyncio.create_task(
                 env.client.post(path + "/messages", json={"question": "생성 중 질문"})

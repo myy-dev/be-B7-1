@@ -172,8 +172,9 @@ def test_user_concurrency_across_rooms(
             ai.generate_answer.side_effect = answer
             monkeypatch.setitem(app.dependency_overrides, get_ai_client, lambda: ai)
             first_room = (await env.client.post("/api/v1/chats")).json()["chat_id"]
-            second_room = (await env.client.post("/api/v1/chats")).json()["chat_id"]
+            second_room = str(uuid4())
             async with env.sessions() as session:
+                session.add(Chat(chat_id=UUID(second_room), user_id=1))
                 session.add(
                     User(id=2, username="other", password_hash="test", name="회원")
                 )
@@ -627,6 +628,29 @@ def test_concurrent_delete_only_one_succeeds(
             await _assert_hidden(env.client, path)
             chat, _ = await _stored_chat(env.sessions, chat_id)
             assert chat.deleted_at == winner
+            assert env.sdk_requests == []
+
+    asyncio.run(run())
+
+
+def test_concurrent_authenticated_creates_reuse_one_empty_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JWT 인증을 거치는 동시 생성 요청에서 한 번만 생성하고 나머지는 재사용한다."""
+
+    async def run() -> None:
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            raise AssertionError("채팅방 생성에서는 AI를 호출하지 않는다.")
+
+        async with _delete_app(tmp_path, monkeypatch, respond) as env:
+            responses = await asyncio.gather(
+                *(env.client.post("/api/v1/chats") for _ in range(8))
+            )
+            assert [r.status_code for r in responses].count(201) == 1
+            assert [r.status_code for r in responses].count(200) == 7
+            assert len({r.json()["chat_id"] for r in responses}) == 1
+            listing = await env.client.get("/api/v1/chats")
+            assert listing.json() == {"items": [responses[0].json()]}
             assert env.sdk_requests == []
 
     asyncio.run(run())
