@@ -2,7 +2,11 @@ from datetime import UTC, datetime
 from time import perf_counter
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.clients.ai import AIClient
+from app.clients.openai import OpenAIClient
+from app.core.chat_request_limiter import ChatRequestLimiter
 from app.core.errors import APIError
 from app.core.logging import log_event
 from app.models.chat import ChatLog
@@ -17,8 +21,12 @@ from app.schemas.error import ResponseErrorCode
 
 
 class ChatService:
-    def __init__(self, repository: ChatRepository) -> None:
+    def __init__(
+        self, repository: ChatRepository, limiter: ChatRequestLimiter
+    ) -> None:
+        """요청 저장소와 앱 전체에서 공유하는 사용자 제한기를 연결한다."""
         self.repository = repository
+        self.limiter = limiter
 
     async def _save_failed_message(
         self,
@@ -28,7 +36,7 @@ class ChatService:
         error_code: ResponseErrorCode,
         started_at: float,
     ) -> None:
-        """AI 처리 실패를 같은 대화 기록에 저장한다.
+        """대화 기록의 실패 상태를 저장한다.
 
         Args:
             message: 실패로 전환할 대화 기록.
@@ -57,7 +65,7 @@ class ChatService:
         )
 
     async def create_chat(self, user_id: int) -> ChatResponse:
-        """사용자의 채팅방을 저장하고 생성 응답을 반환한다."""
+        """사용자의 채팅방을 생성한다."""
         chat = await self.repository.create(user_id)
         log_event(
             "db_save_succeeded",
@@ -68,14 +76,14 @@ class ChatService:
         return ChatResponse.model_validate(chat)
 
     async def list_chats(self, user_id: int) -> ChatListResponse:
-        """사용자에게 속한 전체 채팅방을 목록으로 내림차순으로 반환한다."""
+        """사용자의 채팅방 목록을 조회한다."""
         chats = await self.repository.list_by_user(user_id)
         return ChatListResponse(
             items=[ChatResponse.model_validate(chat) for chat in chats]
         )
 
     async def get_chat(self, chat_id: UUID, user_id: int) -> ChatDetailResponse:
-        """소유권을 확인하고 채팅방과 전체 대화 기록을 반환한다."""
+        """사용자의 채팅방과 대화 기록을 조회한다."""
         chat = await self.repository.get_by_id_and_user(chat_id, user_id)
         if chat is None:
             raise APIError("CHAT_NOT_FOUND")
@@ -87,7 +95,7 @@ class ChatService:
         )
 
     async def delete_chat(self, chat_id: UUID, user_id: int) -> None:
-        """본인 채팅방을 논리 삭제하고 대상이 없으면 조회 오류를 반환한다."""
+        """사용자의 채팅방을 논리 삭제한다."""
         deleted = await self.repository.soft_delete(chat_id, user_id, datetime.now(UTC))
         if not deleted:
             raise APIError("CHAT_NOT_FOUND")
@@ -106,7 +114,7 @@ class ChatService:
         question: str,
         ai_client: AIClient,
     ) -> MessageResponse:
-        """질문을 먼저 저장하고 AI 답변 또는 실패 결과를 같은 기록에 저장한다.
+        """질문에 대한 AI 답변을 생성하고 대화 기록을 저장한다.
 
         Args:
             chat_id: 질문을 보낼 채팅방의 ID.
@@ -119,60 +127,90 @@ class ChatService:
             질문·답변 저장을 완료한 대화 기록.
 
         Raises:
-            APIError: 소유권 검사 또는 AI 호출에 실패한 경우.
+            APIError: 소유권 검사·사용자 점유 또는 AI 호출에 실패한 경우.
             Exception: 예상하지 못한 AI 예외가 발생하고 실패 기록 저장 후 다시 전달되는 경우.
-            SQLAlchemyError: 질문이나 처리 결과 저장에 실패한 경우.
+            SQLAlchemyError: 조회·질문·Conversation ID·처리 결과 저장에 실패한 경우.
         """
         chat = await self.repository.get_by_id_and_user(chat_id, user_id)
         if chat is None:
             raise APIError("CHAT_NOT_FOUND")
-        previous = await self.repository.list_recent_completed(chat_id)
-        history = [
-            (item.question, item.answer) for item in previous if item.answer is not None
-        ]
-        message = ChatLog(
-            request_id=request_id,
-            chat_id=chat_id,
-            question=question,
-            model=ai_client.model,
-            status="pending",
-        )
-        await self.repository.save_message(message)
-        log_event(
-            "db_save_succeeded",
-            user_id=str(user_id),
-            chat_id=chat_id,
-            result="success",
-        )
-        started_at = perf_counter()
-        log_event("ai_call_started", user_id=str(user_id), chat_id=chat_id)
-        try:
-            answer = await ai_client.generate_answer(question, history)
-        except APIError as exc:
-            await self._save_failed_message(
-                message, user_id, chat_id, exc.api_code, started_at
+        async with self.limiter.acquire(user_id):
+            conversation_id: str | None = None
+            history: list[tuple[str, str]] = []
+            if isinstance(ai_client, OpenAIClient):
+                conversation_id = await self.repository.get_conversation_id(chat_id)
+            else:
+                previous = await self.repository.list_recent_completed(chat_id)
+                history = [
+                    (item.question, item.answer)
+                    for item in previous
+                    if item.answer is not None
+                ]
+            message = ChatLog(
+                request_id=request_id,
+                chat_id=chat_id,
+                question=question,
+                model=ai_client.model,
+                status="pending",
             )
-            raise
-        except Exception:
-            await self._save_failed_message(
-                message, user_id, chat_id, "INTERNAL_ERROR", started_at
+            await self.repository.save_message(message)
+            log_event(
+                "db_save_succeeded",
+                user_id=str(user_id),
+                chat_id=chat_id,
+                result="success",
             )
-            raise
-        log_event(
-            "ai_call_succeeded",
-            user_id=str(user_id),
-            chat_id=chat_id,
-            result="success",
-            duration_ms=round((perf_counter() - started_at) * 1000, 3),
-        )
-        message.answer = answer
-        message.status = "completed"
-        message.finished_at = datetime.now(UTC)
-        await self.repository.save_message(message)
-        log_event(
-            "db_save_succeeded",
-            user_id=str(user_id),
-            chat_id=chat_id,
-            result="success",
-        )
-        return MessageResponse.model_validate(message)
+            started_at = perf_counter()
+            log_event("ai_call_started", user_id=str(user_id), chat_id=chat_id)
+            try:
+                if isinstance(ai_client, OpenAIClient):
+                    if conversation_id is None:
+                        conversation_id = await ai_client.create_conversation()
+                        await self.repository.save_conversation_id(
+                            chat_id, conversation_id
+                        )
+                        log_event(
+                            "db_save_succeeded",
+                            user_id=str(user_id),
+                            chat_id=chat_id,
+                            result="success",
+                        )
+                    remaining = ai_client.timeout - (perf_counter() - started_at)
+                    answer = await ai_client.generate_answer(
+                        question,
+                        history,
+                        conversation_id=conversation_id,
+                        timeout_seconds=remaining,
+                    )
+                else:
+                    answer = await ai_client.generate_answer(question, history)
+            except SQLAlchemyError:
+                raise
+            except APIError as exc:
+                await self._save_failed_message(
+                    message, user_id, chat_id, exc.api_code, started_at
+                )
+                raise
+            except Exception:
+                await self._save_failed_message(
+                    message, user_id, chat_id, "INTERNAL_ERROR", started_at
+                )
+                raise
+            log_event(
+                "ai_call_succeeded",
+                user_id=str(user_id),
+                chat_id=chat_id,
+                result="success",
+                duration_ms=round((perf_counter() - started_at) * 1000, 3),
+            )
+            message.answer = answer
+            message.status = "completed"
+            message.finished_at = datetime.now(UTC)
+            await self.repository.save_message(message)
+            log_event(
+                "db_save_succeeded",
+                user_id=str(user_id),
+                chat_id=chat_id,
+                result="success",
+            )
+            return MessageResponse.model_validate(message)

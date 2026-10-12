@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
-from app.core.logging import configure_logging, log_event
+from app.core.logging import LogEvent, configure_logging, log_event
 from app.core.middleware import RequestContextMiddleware
 from app.schemas.error import ErrorCode, ErrorResponse
 
@@ -34,13 +34,22 @@ ERROR_MESSAGES: dict[ErrorCode, str] = {
     "UNAUTHORIZED": "로그인이 필요합니다.",
     "FORBIDDEN": "접근 권한이 없습니다.",
     "CHAT_NOT_FOUND": "채팅방을 찾을 수 없습니다.",
-    "CHAT_BUSY": "이전 질문을 처리 중입니다. 잠시 후 다시 시도해 주세요.",
+    "CHAT_BUSY": "다른 질문을 처리 중입니다. 잠시 후 다시 시도해 주세요.",
     "INVALID_INPUT": "입력값을 확인해 주세요.",
     "DB_ERROR": "대화 데이터를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
     "AI_UNAVAILABLE": "답변을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.",
     "AI_CONFIGURATION_ERROR": "AI 서비스 설정을 확인해야 합니다.",
     "AI_TIMEOUT": "응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.",
 }
+
+
+class DatabaseSaveError(SQLAlchemyError):
+    """저장 처리에서 발생한 DB 오류를 원래 예외와 함께 전달한다."""
+
+    def __init__(self, original: SQLAlchemyError) -> None:
+        """원문을 메시지에 포함하지 않고 저장 실패의 원인을 보관한다."""
+        super().__init__("데이터 저장에 실패했습니다.")
+        self.original = original
 
 
 class AppError(Exception):
@@ -121,9 +130,7 @@ async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-async def http_error_handler(
-    request: Request, exc: HTTPException
-) -> JSONResponse:
+async def http_error_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """경로·메서드 등 일반 HTTP 오류를 공통 형식으로 반환한다.
 
     Args:
@@ -182,17 +189,21 @@ def _error_response(
     code: ErrorCode,
     *,
     exception_type: str,
+    event: LogEvent = "api_error",
     headers: dict[str, str] | None = None,
+    message: str | None = None,
 ) -> JSONResponse:
     request_id = request.state.request_id
-    content = error_body(request, code, ERROR_MESSAGES[code])
+    content = error_body(request, code, message or ERROR_MESSAGES[code])
     log_event(
-        "db_save_failed" if code == "DB_ERROR" else "api_error",
+        event,
         request_id=request_id,
+        method=request.method,
+        path=request.scope["path"],
         result="failure",
         error_code=code,
         exception_type=exception_type,
-        http_status=ERROR_STATUS_CODES[code],
+        status_code=ERROR_STATUS_CODES[code],
     )
     payload = ErrorResponse.model_validate(content)
     return JSONResponse(
@@ -229,7 +240,17 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
     """
     if not isinstance(exc, RequestValidationError):
         raise exc
-    return _error_response(request, "INVALID_INPUT", exception_type=type(exc).__name__)
+    message = None
+    for error in exc.errors():
+        if error["loc"] == ("body", "question") and error["type"] == "string_too_long":
+            message = "질문은 1,000자를 초과할 수 없습니다."
+            break
+    return _error_response(
+        request,
+        "INVALID_INPUT",
+        exception_type=type(exc).__name__,
+        message=message,
+    )
 
 
 async def handle_database_error(request: Request, exc: Exception) -> JSONResponse:
@@ -244,7 +265,14 @@ async def handle_database_error(request: Request, exc: Exception) -> JSONRespons
     """
     if not isinstance(exc, SQLAlchemyError):
         raise exc
-    return _error_response(request, "DB_ERROR", exception_type=type(exc).__name__)
+    is_save_error = isinstance(exc, DatabaseSaveError)
+    original = exc.original if isinstance(exc, DatabaseSaveError) else exc
+    return _error_response(
+        request,
+        "DB_ERROR",
+        exception_type=type(original).__name__,
+        event="db_save_failed" if is_save_error else "api_error",
+    )
 
 
 async def handle_http_error(request: Request, exc: Exception) -> Response:
@@ -260,14 +288,16 @@ async def handle_http_error(request: Request, exc: Exception) -> Response:
     if not isinstance(exc, HTTPException):
         raise exc
     code: ErrorCode
-    if exc.status_code == 401:
-        code = "UNAUTHORIZED"
-    elif exc.status_code == 403:
-        code = "FORBIDDEN"
-    elif exc.status_code == 422:
-        code = "INVALID_INPUT"
-    else:
-        return await http_error_handler(request, exc)
+
+    match exc.status_code:
+        case 401:
+            code = "UNAUTHORIZED"
+        case 403:
+            code = "FORBIDDEN"
+        case 422:
+            code = "INVALID_INPUT"
+        case _:
+            return await http_error_handler(request, exc)
     return _error_response(
         request, code, exception_type=type(exc).__name__, headers=exc.headers
     )
@@ -287,9 +317,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(HTTPException, handle_http_error)
 
 
-def configure_request_processing(
-    app: FastAPI, log_path: str | None = None
-) -> None:
+def configure_request_processing(app: FastAPI, log_path: str | None = None) -> None:
     """요청 미들웨어·이벤트 로그·공통 오류 핸들러를 등록한다.
 
     Args:

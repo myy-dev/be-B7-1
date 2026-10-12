@@ -13,6 +13,7 @@ from sqlalchemy.exc import OperationalError
 from app.api.dependencies import get_ai_client, get_chat_service, get_current_user_id
 from app.api.error_responses import error_response
 from app.api.v1.endpoints.chat import router
+from app.core.chat_request_limiter import ChatRequestLimiter
 from app.core.errors import APIError, configure_request_processing, internal_error
 from app.models.chat import Chat
 from app.schemas.error import ErrorCode, ErrorResponse
@@ -71,6 +72,21 @@ def test_errors_use_common_schema_and_named_examples(docs_client: TestClient) ->
     assert docs_client.get("/docs").status_code == 200
 
 
+def test_question_documents_length_limit(docs_client: TestClient) -> None:
+    """질문 요청의 길이 제한과 설명이 OpenAPI에 반영된다."""
+    schema = docs_client.get("/openapi.json").json()
+    request_schema = schema["paths"][MESSAGE_PATH]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert request_schema["$ref"] == "#/components/schemas/MessageCreateRequest"
+    question = schema["components"]["schemas"]["MessageCreateRequest"]["properties"][
+        "question"
+    ]
+    assert question["minLength"] == 1
+    assert question["maxLength"] == 1000
+    assert "앞뒤 공백 제거 후 1~1,000자" in question["description"]
+
+
 def test_delete_documents_no_body_and_expected_errors(docs_client: TestClient) -> None:
     """삭제 API는 요청·성공 본문 없이 인증과 예상 오류를 문서화한다."""
     operation = docs_client.get("/openapi.json").json()["paths"][CHAT_PATH]["delete"]
@@ -82,6 +98,16 @@ def test_delete_documents_no_body_and_expected_errors(docs_client: TestClient) -
     assert parameter["name"] == "chat_id"
     assert parameter["in"] == "path"
     assert parameter["schema"]["format"] == "uuid"
+
+
+def test_message_documents_user_concurrency(docs_client: TestClient) -> None:
+    """사용자별 제한의 409 응답과 안내 문구를 문서화한다."""
+    operation = docs_client.get("/openapi.json").json()["paths"][MESSAGE_PATH]["post"]
+    assert "사용자당 질문 하나" in operation["description"]
+    example = operation["responses"]["409"]["content"]["application/json"][
+        "examples"
+    ]["CHAT_BUSY"]["value"]
+    assert example["error"]["message"] == APIError("CHAT_BUSY").message
 
 
 @pytest.mark.parametrize(
@@ -109,7 +135,7 @@ def test_examples_match_real_services_and_handlers(
     repository.get_by_id_and_user.return_value = None
     repository.soft_delete.return_value = False
     repository.list_recent_completed.return_value = []
-    service = ChatService(repository)
+    service = ChatService(repository, ChatRequestLimiter())
     docs_client.app.dependency_overrides[get_chat_service] = lambda: service
     ai = AsyncMock()
     ai.model = "test-only"

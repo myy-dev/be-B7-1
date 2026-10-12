@@ -26,6 +26,7 @@ def _user_dict(user: User) -> dict:
         "id": user.id,
         "username": user.username,
         "name": user.name,
+        "role": user.role,
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
     }
@@ -65,6 +66,18 @@ class DbUserRepository(UserRepository):
     async def get_user(self, user_id: int) -> dict | None:
         user = await self.session.scalar(select(User).where(User.id == user_id))
         return _user_dict(user) if user is not None else None
+
+    async def update_role(self, user_id: int, role: str) -> dict | None:
+        user = await self.session.scalar(select(User).where(User.id == user_id))
+        if user is None:
+            return None
+        user.role = role
+        try:
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
+        return {"id": user.id, "username": user.username, "role": user.role}
 
 
 class DbChatLogRepository(ChatLogRepository):

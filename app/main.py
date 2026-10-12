@@ -4,7 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router, health_router
-from app.clients.ai import AIClient
+from app.clients.openai import OpenAIClient
+from app.core.chat_request_limiter import ChatRequestLimiter
 from app.core.config import get_settings
 from app.core.database import create_db_and_tables, engine
 from app.core.errors import configure_request_processing
@@ -14,12 +15,14 @@ from app.core.errors import configure_request_processing
 async def lifespan(app: FastAPI):
     try:
         await create_db_and_tables()
-        client = AIClient(
+        client = OpenAIClient(
             settings.openai_api_key,
             settings.openai_model,
             settings.ai_timeout_seconds,
+            settings.ai_max_retries,
         )
         app.state.ai_client = client
+        app.state.chat_request_limiter = ChatRequestLimiter()
         try:
             yield
         finally:

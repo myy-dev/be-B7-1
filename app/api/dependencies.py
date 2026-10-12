@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.ai import AIClient
+from app.core.chat_request_limiter import ChatRequestLimiter
 from app.core.database import get_db
 from app.core.security import decode_access_token
 from app.models.user import User
@@ -71,8 +72,19 @@ async def get_current_user_id(user: CurrentUser) -> int:
 CurrentUserId = Annotated[int, Depends(get_current_user_id)]
 
 
+def get_chat_request_limiter(request: Request) -> ChatRequestLimiter:
+    """앱 시작 시 생성한 공용 채팅 요청 제한기를 반환한다."""
+    return request.app.state.chat_request_limiter
+
+
+ChatRequestLimiterDep = Annotated[ChatRequestLimiter, Depends(get_chat_request_limiter)]
+
+
 def get_chat_service(
-    request: Request, user_id: CurrentUserId, db: DBSession
+    request: Request,
+    user_id: CurrentUserId,
+    db: DBSession,
+    limiter: ChatRequestLimiterDep,
 ) -> ChatService:
     """채팅 서비스를 생성하고 인증된 ID를 요청 로그에 연결한다.
 
@@ -80,12 +92,13 @@ def get_chat_service(
         request: 현재 HTTP 요청.
         user_id: 인증 의존성에서 제공한 사용자 ID.
         db: 요청의 비동기 DB 세션.
+        limiter: 앱 전체에서 공유하는 채팅 요청 제한기.
 
     Returns:
         채팅방과 대화 기록을 처리할 서비스.
     """
     request.state.user_id = user_id
-    return ChatService(ChatRepository(db))
+    return ChatService(ChatRepository(db), limiter)
 
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]

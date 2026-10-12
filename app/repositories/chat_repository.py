@@ -5,6 +5,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import DatabaseSaveError
 from app.models.chat import Chat, ChatLog
 
 
@@ -13,18 +14,18 @@ class ChatRepository:
         self.session = session
 
     async def create(self, user_id: int) -> Chat:
-        """채팅방을 저장하고 커밋 완료 후 반환한다."""
+        """채팅방을 생성한다."""
         chat = Chat(user_id=user_id)
         try:
             self.session.add(chat)
             await self.session.commit()
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
             await self.session.rollback()
-            raise
+            raise DatabaseSaveError(exc) from exc
         return chat
 
     async def list_by_user(self, user_id: int) -> list[Chat]:
-        """소유자의 미삭제 채팅방을 생성 시각·ID 내림차순으로 조회한다."""
+        """사용자의 채팅방 목록을 조회한다."""
         result = await self.session.scalars(
             select(Chat)
             .where(Chat.user_id == user_id, Chat.deleted_at.is_(None))
@@ -32,8 +33,44 @@ class ChatRepository:
         )
         return list(result.all())
 
+    async def get_conversation_id(self, chat_id: UUID) -> str | None:
+        """채팅방에 저장된 현재 Conversation ID를 조회한다.
+
+        Args:
+            chat_id: 소유권 검사를 마친 채팅방의 ID.
+
+        Returns:
+            저장된 Conversation ID 또는 연결되지 않은 경우 None.
+        """
+        return await self.session.scalar(
+            select(Chat.conversation_id).where(Chat.chat_id == chat_id)
+        )
+
+    async def save_conversation_id(
+        self, chat_id: UUID, conversation_id: str
+    ) -> None:
+        """채팅방의 Conversation ID를 저장한다.
+
+        Args:
+            chat_id: 소유권 검사를 마친 채팅방의 ID.
+            conversation_id: OpenAI에서 생성한 Conversation ID.
+
+        Raises:
+            DatabaseSaveError: ID 저장에 실패한 경우.
+        """
+        try:
+            await self.session.execute(
+                update(Chat)
+                .where(Chat.chat_id == chat_id)
+                .values(conversation_id=conversation_id)
+            )
+            await self.session.commit()
+        except SQLAlchemyError as exc:
+            await self.session.rollback()
+            raise DatabaseSaveError(exc) from exc
+
     async def list_recent_completed(self, chat_id: UUID) -> list[ChatLog]:
-        """채팅방의 최근 완료 기록 5개를 시간순으로 조회한다.
+        """채팅방의 최근 완료된 대화 기록을 조회한다.
 
         Args:
             chat_id: 소유권 검사를 마친 채팅방의 ID.
@@ -50,7 +87,7 @@ class ChatRepository:
         return list(reversed(result.all()))
 
     async def save_message(self, message: ChatLog) -> ChatLog:
-        """질문 기록을 저장하거나 갱신하고 트랜잭션을 종료한다.
+        """대화 기록을 저장하거나 갱신한다.
 
         Args:
             message: 저장할 질문 또는 갱신한 처리 결과.
@@ -64,13 +101,13 @@ class ChatRepository:
         try:
             self.session.add(message)
             await self.session.commit()
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
             await self.session.rollback()
-            raise
+            raise DatabaseSaveError(exc) from exc
         return message
 
     async def get_by_id_and_user(self, chat_id: UUID, user_id: int) -> Chat | None:
-        """ID와 소유자가 모두 일치하는 미삭제 채팅방을 조회한다."""
+        """ID와 사용자로 채팅방을 조회한다."""
         return await self.session.scalar(
             select(Chat).where(
                 Chat.chat_id == chat_id,
@@ -82,7 +119,7 @@ class ChatRepository:
     async def soft_delete(
         self, chat_id: UUID, user_id: int, deleted_at: datetime
     ) -> bool:
-        """소유자의 미삭제 채팅방에 삭제 시각을 저장하고 성공 여부를 반환한다."""
+        """채팅방을 논리 삭제한다."""
         try:
             deleted_id = await self.session.scalar(
                 update(Chat)
@@ -95,13 +132,13 @@ class ChatRepository:
                 .returning(Chat.chat_id)
             )
             await self.session.commit()
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
             await self.session.rollback()
-            raise
+            raise DatabaseSaveError(exc) from exc
         return deleted_id is not None
 
     async def list_messages(self, chat_id: UUID) -> list[ChatLog]:
-        """채팅방의 전체 기록을 생성 시각·요청 ID 오름차순으로 조회한다."""
+        """채팅방의 대화 기록을 조회한다."""
         result = await self.session.scalars(
             select(ChatLog)
             .where(ChatLog.chat_id == chat_id)

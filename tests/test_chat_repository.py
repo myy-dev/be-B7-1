@@ -13,6 +13,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.database import Base, _enable_sqlite_foreign_keys
+from app.core.errors import DatabaseSaveError
 from app.models.chat import Chat, ChatLog
 from app.models.user import User
 from app.repositories.chat_repository import ChatRepository
@@ -174,8 +175,10 @@ def test_soft_delete_commit_failure_rolls_back_and_session_remains_usable(
             chat_id = (await repository.create(1)).chat_id
             failure = OperationalError("test-only", {}, RuntimeError())
             with patch.object(session, "commit", AsyncMock(side_effect=failure)):
-                with pytest.raises(OperationalError):
+                with pytest.raises(DatabaseSaveError) as caught:
                     await repository.soft_delete(chat_id, 1, deleted_at)
+                assert caught.value.original is failure
+                assert caught.value.__cause__ is failure
             assert not session.in_transaction()
             chat = await repository.get_by_id_and_user(chat_id, 1)
             assert chat is not None
