@@ -21,9 +21,7 @@ from app.schemas.error import ResponseErrorCode
 
 
 class ChatService:
-    def __init__(
-        self, repository: ChatRepository, limiter: ChatRequestLimiter
-    ) -> None:
+    def __init__(self, repository: ChatRepository, limiter: ChatRequestLimiter) -> None:
         """요청 저장소와 앱 전체에서 공유하는 사용자 제한기를 연결한다."""
         self.repository = repository
         self.limiter = limiter
@@ -132,10 +130,11 @@ class ChatService:
             Exception: 예상하지 못한 AI 예외가 발생하고 실패 기록 저장 후 다시 전달되는 경우.
             SQLAlchemyError: 조회·질문·Conversation ID·처리 결과 저장에 실패한 경우.
         """
-        chat = await self.repository.get_by_id_and_user(chat_id, user_id)
-        if chat is None:
-            raise APIError("CHAT_NOT_FOUND")
+
         async with self.limiter.acquire(user_id):
+            chat = await self.repository.get_by_id_and_user(chat_id, user_id)
+            if chat is None:
+                raise APIError("CHAT_NOT_FOUND")
             conversation_id: str | None = None
             history: list[tuple[str, str]] = []
             if isinstance(ai_client, OpenAIClient):
