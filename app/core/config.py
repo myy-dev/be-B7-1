@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     ai_max_retries: int = Field(default=4, ge=0)
     ai_max_concurrent_requests: int = Field(default=3, gt=0)
     jwt_secret_key: str = Field(min_length=32)
-    access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
+    access_token_expire_minutes: int = Field(default=300, ge=1, le=1440)
     system_log_path: str = "logs/system.jsonl"
     cors_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",
