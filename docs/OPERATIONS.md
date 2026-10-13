@@ -12,8 +12,9 @@
 | `OPENAI_MODEL` | `gpt-6-luna` | 코드 기본 모델 ID. 빈 값 금지. 운영 계정에서 사용 가능한 ID로 지정 |
 | `AI_TIMEOUT_SECONDS` | `30` | 재시도·대기를 포함한 전체 AI 처리 제한 시간. 양의 유한 초 값 |
 | `AI_MAX_RETRIES` | `4` | 최초 호출을 제외한 최대 재시도 횟수. 0 이상 정수. 0이면 재시도 비활성화 |
+| `AI_MAX_CONCURRENT_REQUESTS` | `3` | 한 프로세스에서 동시에 처리할 전체 질문 수. 양의 정수 |
 | `JWT_SECRET_KEY` | 기본값 없음 | HS256 서명 키. 최소 32자. `openssl rand -hex 32`로 생성 |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | 액세스 토큰 유효 시간. 1~1440분 |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `300` | 액세스 토큰 유효 시간. 1~1440분 |
 | `DATABASE_URL` | 저장소 루트의 `app.db` 절대 경로 | `sqlite+aiosqlite` URL. 빈 값 금지. Railway 예시: `sqlite+aiosqlite:////data/app.db` |
 | `SYSTEM_LOG_PATH` | `logs/system.jsonl` | 이벤트 파일 경로. Railway 예시: `/data/logs/system.jsonl` |
 | `CORS_ORIGINS` | 코드에는 로컬 2개와 배포 프론트 2개 등록 | 쉼표로 구분한 실제 프론트 Origin. 환경 변수로 지정하면 기본 목록을 대체 |
@@ -26,8 +27,9 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-6-luna
 AI_TIMEOUT_SECONDS=30
 AI_MAX_RETRIES=4
+AI_MAX_CONCURRENT_REQUESTS=3
 JWT_SECRET_KEY=
-ACCESS_TOKEN_EXPIRE_MINUTES=30
+ACCESS_TOKEN_EXPIRE_MINUTES=300
 DATABASE_URL=sqlite+aiosqlite:///./app.db
 SYSTEM_LOG_PATH=logs/system.jsonl
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,https://www.quackquack-e.duckdns.org,https://b7-1-two.vercel.app
@@ -61,7 +63,8 @@ DATABASE_URL=sqlite+aiosqlite:////data/app.db
 SYSTEM_LOG_PATH=/data/logs/system.jsonl
 AI_TIMEOUT_SECONDS=30
 AI_MAX_RETRIES=4
-ACCESS_TOKEN_EXPIRE_MINUTES=30
+AI_MAX_CONCURRENT_REQUESTS=3
+ACCESS_TOKEN_EXPIRE_MINUTES=300
 CORS_ORIGINS=https://www.quackquack-e.duckdns.org,https://b7-1-two.vercel.app
 ```
 
@@ -139,9 +142,9 @@ rg -F '응답에서 확인한-request-id' logs/system.jsonl
 
 ## AI 재시도와 타임아웃
 
-SDK 재시도는 `max_retries=0`이며 `OpenAIClient`가 직접 재시도합니다. 기본 `AI_MAX_RETRIES=4`는 최초 호출 포함 최대 5회입니다. `AI_TIMEOUT_SECONDS=30`은 AI 호출 시작부터 모든 시도·대기를 합한 30초이며 앞뒤 DB 시간은 제외합니다. HTTP 요청·DB 작업을 재전송하지 않습니다.
+SDK 재시도는 `max_retries=0`이며 `OpenAIClient`가 직접 재시도합니다. 기본 `AI_MAX_RETRIES=4`는 최초 호출 포함 최대 5회입니다. `AI_TIMEOUT_SECONDS=30`은 Conversation 생성과 답변 호출의 모든 시도·대기를 합한 30초이며 앞뒤 DB 시간은 제외합니다. HTTP 요청·DB 작업을 재전송하지 않습니다.
 
-- 재시도: 연결 오류(SDK 타임아웃 포함)·HTTP 408·409·429·5xx. 전체 시간·횟수 제한 안에서 시도합니다.
+- 답변 재시도: Conversation을 사용하는 운영 호출은 HTTP 429만, Conversation이 없는 호출은 연결 오류·HTTP 408·409·429·5xx를 전체 시간·횟수 제한 안에서 재시도합니다. Conversation 생성은 재시도하지 않습니다.
 - 재시도 제외: `x-should-retry: false`, 인증·권한·모델 찾기 오류, 잘못된 형식·미완료·빈 답변.
 - `Retry-After`: 양의 유한 초 값(소수 포함)은 지터 없이 사용합니다. `retry-after-ms`·날짜·잘못된 값(0 이하·NaN·무한대 등)은 사용하지 않고 백오프로 대체합니다.
 - 백오프: 1·2·4·8초, 상한 8초에 매번 0.75~1.0배 무작위 지터를 적용합니다.
@@ -155,7 +158,9 @@ SDK 재시도는 `max_retries=0`이며 `OpenAIClient`가 직접 재시도합니�
 | 예상하지 못한 AI 예외 | `failed/INTERNAL_ERROR` 저장 후 공통 500 |
 | DB 조회·저장 예외 | `500 DB_ERROR`, 롤백·실패 로그. 결과 저장 실패 시 기록이 pending으로 남을 수 있음 |
 
-재시도는 같은 질문·문맥·최초 요청 ID와 기록 한 행을 유지합니다. 클라이언트의 재전송은 새 요청·새 기록입니다. 중단된 `pending` 자동 복구·요청 멱등성·같은 방 동시 질문 차단은 없습니다. `CHAT_BUSY`는 정의만 있고 반환 경로는 없습니다.
+재시도는 같은 질문·Conversation·최초 요청 ID와 기록 한 행을 유지합니다. 클라이언트의 재전송은 새 요청·새 기록입니다. 중단된 `pending` 자동 복구와 요청 멱등성은 없습니다.
+
+사용자당 질문 하나만 처리하며 추가 질문은 `409 CHAT_BUSY`로 거절합니다. 한 프로세스의 전체 동시 질문이 `AI_MAX_CONCURRENT_REQUESTS`에 도달하면 대기시키지 않고 `503 SERVER_BUSY`를 반환합니다. 제한 상태는 프로세스 메모리에 있으므로 여러 인스턴스 사이에서 공유되지 않습니다.
 
 ## 운영 검증
 
