@@ -22,6 +22,7 @@ erDiagram
         int user_id FK
         datetime created_at
         datetime deleted_at
+        string conversation_id
     }
     chat_logs {
         uuid request_id PK
@@ -45,7 +46,7 @@ erDiagram
 | 테이블 | 역할과 보충 설명 |
 | --- | --- |
 | `users` | 회원. 고유 `username` 최대 20자, `password_hash` 255자, `name` 50자. `role` 기본 `user`, 관리자 `admin`. `created_at` 가입 시각, `last_login_at` 마지막 로그인 시각(nullable) |
-| `chats` | 회원 소유 채팅방. `created_at` 생성 시각, `deleted_at` 논리 삭제 시각(nullable) |
+| `chats` | 회원 소유 채팅방. `created_at` 생성 시각, `deleted_at` 논리 삭제 시각(nullable), `conversation_id` OpenAI 대화 식별자(nullable) |
 | `chat_logs` | 질문·답변과 처리 결과. `request_id` 최초 질문 요청 ID, `model` 호출 모델, `created_at` 질문 저장 시각, `finished_at` 종료 시각. 상태별 null 조건은 아래 표 참고 |
 | `revoked_tokens` | 폐기한 토큰의 SHA-256 해시(64자)와 만료 시각(`expires_at`). 회원 외래키 없음 |
 
@@ -66,8 +67,8 @@ erDiagram
 ## 조회와 삭제
 
 - 사용자: 본인 미삭제 채팅방의 모든 상태 기록을 생성 시각·요청 ID 오름차순으로 조회합니다.
-- AI 문맥: 최근 성공 5건을 오래된 순으로 사용합니다. [문맥 전략](ARCHITECTURE.md#최근-대화-5개-문맥-전략) 참고.
-- 관리자: 회원·기간별 대화와 회원별 세션을 조회합니다. 세션 제목은 첫 질문으로 구성합니다.
+- AI 문맥: OpenAI는 채팅방의 `conversation_id`로 Conversation을 이어가며, Conversation 미사용 AI 클라이언트는 최근 성공 5건을 오래된 순으로 사용합니다. [문맥 전략](ARCHITECTURE.md#대화-문맥-전략) 참고.
+- 관리자: 회원·기간별 대화와 회원별 세션을 조회합니다.
 - 삭제는 `deleted_at`만 설정합니다. 사용자 조회에서 제외되지만 관리자·DB에는 원본 기록이 남습니다.
 
 ## 저장된 질문과 답변 확인
@@ -94,31 +95,32 @@ curl "http://127.0.0.1:8000/api/v1/chats/$CHAT_ID" -H "Authorization: Bearer $TO
 
 ### 읽기 전용 SQL로 확인
 
-로컬 서버 실행 후 저장소 루트에서 실행합니다. DB를 읽기 전용으로 열며 파일이 없으면 오류를 반환합니다.
+Railway CLI에서 `railway ssh`로 배포 컨테이너에 접속한 뒤 실행합니다. 각 명령은 `/data/app.db`를 읽기 전용으로 열고 최근 50건을 출력하며, DB 파일이 없으면 오류를 반환합니다. `railway run`은 로컬에서 실행되므로 운영 볼륨 확인에 사용하지 않습니다.
+
+#### 회원 (`users`)
 
 ```bash
-uv run python - <<'PY'
-import sqlite3
-from pathlib import Path
-
-db_path = Path("app.db").resolve()
-with sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True) as connection:
-    connection.row_factory = sqlite3.Row
-    rows = connection.execute("""
-        SELECT c.user_id, l.chat_id, l.request_id, l.question, l.answer,
-               l.status, l.error_code, l.created_at, l.finished_at
-        FROM chat_logs AS l
-        JOIN chats AS c ON c.chat_id = l.chat_id
-        ORDER BY l.created_at DESC, l.request_id DESC
-        LIMIT 20
-    """).fetchall()
-    for row in rows:
-        print(dict(row))
-PY
+python -c "import sqlite3; con=sqlite3.connect('file:/data/app.db?mode=ro', uri=True); con.row_factory=sqlite3.Row; [print(dict(r)) for r in con.execute('SELECT id, username, name, role, created_at, last_login_at FROM users ORDER BY created_at DESC, id DESC LIMIT 50')]; con.close()"
 ```
 
-`DATABASE_URL`를 변경했다면 `db_path`를 실제 파일로 바꿉니다. Railway는 `railway ssh`로 배포 컨테이너에 접속해 경로를 `/data/app.db`로, 첫 명령을 `python - <<'PY'`로 바꿉니다. `railway run`은 로컬 실행이므로 운영 볼륨 확인에 사용하지 않습니다.
+#### 채팅방 (`chats`)
 
-SQL은 전체 회원·논리 삭제된 방도 조회합니다. 특정 회원만 보려면 `ORDER BY` 앞에 `WHERE c.user_id = 원하는 정수`를 추가합니다. SQLite UUID는 하이픈 없이 저장됩니다. 외부 증빙에는 점검용 계정의 기록만 사용합니다.
+```bash
+python -c "import sqlite3; con=sqlite3.connect('file:/data/app.db?mode=ro', uri=True); con.row_factory=sqlite3.Row; [print(dict(r)) for r in con.execute('SELECT chat_id, user_id, created_at, deleted_at, conversation_id FROM chats ORDER BY created_at DESC, chat_id DESC LIMIT 50')]; con.close()"
+```
+
+#### 대화 기록 (`chat_logs`)
+
+```bash
+python -c "import sqlite3; con=sqlite3.connect('file:/data/app.db?mode=ro', uri=True); con.row_factory=sqlite3.Row; [print(dict(r)) for r in con.execute('SELECT c.user_id, l.chat_id, l.request_id, l.question, l.answer, l.status, l.created_at FROM chat_logs AS l JOIN chats AS c ON c.chat_id = l.chat_id ORDER BY l.created_at DESC, l.request_id DESC LIMIT 50')]; con.close()"
+```
+
+#### 폐기 토큰 (`revoked_tokens`)
+
+```bash
+python -c "import sqlite3; con=sqlite3.connect('file:/data/app.db?mode=ro', uri=True); con.row_factory=sqlite3.Row; [print(dict(r)) for r in con.execute('SELECT token_hash, expires_at FROM revoked_tokens ORDER BY expires_at DESC, token_hash DESC LIMIT 50')]; con.close()"
+```
+
+로컬 DB를 확인하려면 각 명령의 `file:/data/app.db?mode=ro`를 `file:app.db?mode=ro`로 바꿉니다. SQL은 전체 회원과 논리 삭제된 방도 조회합니다. 대화 기록에서 특정 회원만 보려면 `ORDER BY` 앞에 `WHERE c.user_id = 원하는 정수`를 추가합니다. SQLite UUID는 하이픈 없이 저장됩니다. 외부 증빙에는 점검용 계정의 기록만 사용합니다.
 
 `create_all`은 기존 테이블을 변경하지 않습니다. 모델 변경에는 별도 마이그레이션·백업이 필요합니다. [백업·보관 안내](OPERATIONS.md#데이터와-비밀값-관리) 참고.
